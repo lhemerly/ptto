@@ -1,0 +1,35 @@
+use clap::{Parser, Subcommand};
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "ptto",
+    version,
+    about = "Deploy single-binary web apps to a single VPS"
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Prepare a target VPS (Caddy/systemd prerequisites)
+    Init {
+        /// SSH target in user@host format
+        target: String,
+    },
+    /// Build and deploy the app to a server
+    Deploy {
+        /// Public domain that should route to this deployment
+        #[arg(long)]
+        domain: String,
+    },
+    /// Stream remote service logs
+    Logs {
+        /// Name of the service to stream
+        #[arg(default_value = "ptto-app")]
+        service: String,
+    },
+    /// Generate a deploy key string for CI usage
+    GenerateKey,
+}

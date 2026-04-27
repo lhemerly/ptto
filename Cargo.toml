@@ -1,0 +1,16 @@
+[package]
+name = "ptto"
+version = "0.1.0"
+edition = "2021"
+description = "A highly opinionated CLI to deploy single-binary web apps to a single VPS"
+license = "MIT"
+repository = "https://example.com/ptto"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "process", "fs"] }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
