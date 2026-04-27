@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "A highly opinionated CLI to deploy single-binary web apps to a single VPS"
 license = "MIT"
-repository = "https://example.com/ptto"
+repository = "https://github.com/lhemerly/ptto/"
 
 [dependencies]
 anyhow = "1.0"
