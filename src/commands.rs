@@ -25,7 +25,12 @@ fn init(target: &str, dry_run: bool) -> Result<()> {
     println!("[ptto] bootstrap starting for {target}");
     let ssh = SshClient::new(target, dry_run);
     ssh.run("echo '[ptto] SSH connectivity check succeeded'")?;
-    println!("[ptto] ssh engine ready for next phase (server init)");
+
+    for command in caddy_init_commands() {
+        ssh.run(&command)?;
+    }
+
+    println!("[ptto] server init complete (Caddy installed and started)");
     Ok(())
 }
 
@@ -46,4 +51,52 @@ fn logs(service: &str) -> Result<()> {
 fn generate_key() -> Result<()> {
     println!("[ptto] key generation hook planned for CI/CD");
     Ok(())
+}
+
+fn caddy_init_commands() -> Vec<String> {
+    vec![
+        concat!(
+            "set -eu; ",
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; ",
+            "elif command -v sudo >/dev/null 2>&1; then SUDO=\"sudo\"; ",
+            "else echo \"[ptto] error: root or sudo is required\"; exit 1; fi; ",
+            "if command -v caddy >/dev/null 2>&1; then ",
+            "echo \"[ptto] Caddy already installed\"; ",
+            "else ",
+            "if ! command -v apt-get >/dev/null 2>&1; then ",
+            "echo \"[ptto] error: apt-get is required (Ubuntu/Debian)\"; exit 1; ",
+            "fi; ",
+            "$SUDO apt-get update; ",
+            "$SUDO apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg; ",
+            "$SUDO mkdir -p /usr/share/keyrings; ",
+            "curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | ",
+            "$SUDO gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg; ",
+            "curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | ",
+            "$SUDO tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null; ",
+            "$SUDO apt-get update; ",
+            "$SUDO apt-get install -y caddy; ",
+            "fi"
+        )
+        .to_string(),
+        concat!(
+            "set -eu; ",
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; else SUDO=\"sudo\"; fi; ",
+            "$SUDO systemctl enable --now caddy; ",
+            "$SUDO systemctl status caddy --no-pager --lines=0"
+        )
+        .to_string(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::caddy_init_commands;
+
+    #[test]
+    fn caddy_init_contains_install_and_service_steps() {
+        let commands = caddy_init_commands();
+        assert_eq!(commands.len(), 2);
+        assert!(commands[0].contains("apt-get install -y caddy"));
+        assert!(commands[1].contains("systemctl enable --now caddy"));
+    }
 }
