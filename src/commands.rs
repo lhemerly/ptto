@@ -58,7 +58,9 @@ fn caddy_init_commands() -> Vec<String> {
         concat!(
             "set -eu; ",
             "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; ",
-            "elif command -v sudo >/dev/null 2>&1; then SUDO=\"sudo\"; ",
+            "elif command -v sudo >/dev/null 2>&1; then ",
+            "if sudo -n true >/dev/null 2>&1; then SUDO=\"sudo\"; ",
+            "else echo \"[ptto] error: passwordless sudo is required for non-interactive init\"; exit 1; fi; ",
             "else echo \"[ptto] error: root or sudo is required\"; exit 1; fi; ",
             "if command -v caddy >/dev/null 2>&1; then ",
             "echo \"[ptto] Caddy already installed\"; ",
@@ -69,10 +71,12 @@ fn caddy_init_commands() -> Vec<String> {
             "$SUDO apt-get update; ",
             "$SUDO apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg; ",
             "$SUDO mkdir -p /usr/share/keyrings; ",
-            "curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | ",
-            "$SUDO gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg; ",
-            "curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | ",
-            "$SUDO tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null; ",
+            "tmp_gpg=\"$(mktemp)\"; tmp_list=\"$(mktemp)\"; ",
+            "trap 'rm -f \"$tmp_gpg\" \"$tmp_list\"' EXIT; ",
+            "curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key -o \"$tmp_gpg\"; ",
+            "curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o \"$tmp_list\"; ",
+            "$SUDO gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \"$tmp_gpg\"; ",
+            "$SUDO mv \"$tmp_list\" /etc/apt/sources.list.d/caddy-stable.list; ",
             "$SUDO apt-get update; ",
             "$SUDO apt-get install -y caddy; ",
             "fi"
@@ -80,7 +84,11 @@ fn caddy_init_commands() -> Vec<String> {
         .to_string(),
         concat!(
             "set -eu; ",
-            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; else SUDO=\"sudo\"; fi; ",
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; ",
+            "elif command -v sudo >/dev/null 2>&1; then ",
+            "if sudo -n true >/dev/null 2>&1; then SUDO=\"sudo\"; ",
+            "else echo \"[ptto] error: passwordless sudo is required for non-interactive init\"; exit 1; fi; ",
+            "else echo \"[ptto] error: root or sudo is required\"; exit 1; fi; ",
             "$SUDO systemctl enable --now caddy; ",
             "$SUDO systemctl status caddy --no-pager --lines=0"
         )
@@ -98,5 +106,9 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert!(commands[0].contains("apt-get install -y caddy"));
         assert!(commands[1].contains("systemctl enable --now caddy"));
+        assert!(commands[0].contains("sudo -n true"));
+        assert!(commands[1].contains("sudo -n true"));
+        assert!(commands[0]
+            .contains("curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o"));
     }
 }
