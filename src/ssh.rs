@@ -77,6 +77,7 @@ fn build_scp_args(target: &str, local_file: &Path, remote_path: &str) -> Result<
         "BatchMode=yes".to_string(),
         "-o".to_string(),
         "StrictHostKeyChecking=accept-new".to_string(),
+        "--".to_string(),
         local_file.to_string(),
         format!("{target}:{remote_path}"),
     ])
@@ -115,6 +116,7 @@ mod tests {
                 "BatchMode=yes",
                 "-o",
                 "StrictHostKeyChecking=accept-new",
+                "--",
                 "./app",
                 "deployer@example.com:/tmp/app"
             ]
