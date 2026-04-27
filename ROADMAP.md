@@ -4,7 +4,9 @@ The goal is to get from zero to a reliable, production-ready "potato" stack as f
 
 # Phase 1: Patient Zero (Go + SQLite) - Current
 
-[ ] CLI Scaffolding: Setup the Rust CLI structure (clap, tokio).
+[x] CLI Scaffolding: Setup the Rust CLI structure (clap, tokio).
+
+[x] CI Baseline: Add GitHub Actions checks for fmt, clippy, build, and tests on PRs.
 
 [ ] SSH Engine: Implement secure SSH execution and file transfer from local to remote using libssh2 or system ssh.
 
