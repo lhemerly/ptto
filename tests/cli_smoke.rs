@@ -13,8 +13,24 @@ fn help_shows_manifesto_language() {
 #[test]
 fn init_command_accepts_target() {
     let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
-    cmd.args(["init", "root@127.0.0.1"])
+    cmd.args(["init", "root@127.0.0.1", "--dry-run"])
         .assert()
         .success()
-        .stdout(contains("bootstrap planned for root@127.0.0.1"));
+        .stdout(contains("bootstrap starting for root@127.0.0.1"));
+}
+
+#[test]
+fn deploy_command_supports_ssh_transfer_dry_run() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.args([
+        "deploy",
+        "--domain",
+        "example.com",
+        "--target",
+        "root@127.0.0.1",
+        "--dry-run",
+    ])
+    .assert()
+    .success()
+    .stdout(contains("artifact staged over ssh"));
 }

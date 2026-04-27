@@ -17,12 +17,24 @@ pub enum Command {
     Init {
         /// SSH target in user@host format
         target: String,
+        /// Print remote commands instead of executing them
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
     },
     /// Build and deploy the app to a server
     Deploy {
         /// Public domain that should route to this deployment
         #[arg(long)]
         domain: String,
+        /// SSH target in user@host format
+        #[arg(long)]
+        target: String,
+        /// Path to the already built app binary to transfer
+        #[arg(long, default_value = "./app")]
+        artifact: String,
+        /// Print remote commands instead of executing them
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
     },
     /// Stream remote service logs
     Logs {
