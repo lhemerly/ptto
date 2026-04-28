@@ -16,7 +16,7 @@ The goal is to get from zero to a reliable, production-ready "potato" stack as f
 
 [x] Systemd Management: Auto-generate and reload systemd service files for the Go binary.
 
-[ ] Caddy Routing: Auto-generate Caddyfile for reverse proxying port 80/443 to the binary's internal port.
+[x] Caddy Routing: Auto-generate Caddyfile for reverse proxying port 80/443 to the binary's internal port.
 
 Phase 2: The Terminal Dashboard (Local DX)
 
