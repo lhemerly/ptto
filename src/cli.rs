@@ -29,9 +29,12 @@ pub enum Command {
         /// SSH target in user@host format
         #[arg(long)]
         target: String,
-        /// Path to the already built app binary to transfer
+        /// Output path for the compiled Linux amd64 binary
         #[arg(long, default_value = "./app")]
         artifact: String,
+        /// Go package/directory to build
+        #[arg(long, default_value = ".")]
+        source: String,
         /// Print remote commands instead of executing them
         #[arg(long, default_value_t = false)]
         dry_run: bool,

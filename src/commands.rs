@@ -1,6 +1,8 @@
 use std::path::Path;
+use std::process::Command as ProcessCommand;
+use std::{ffi::OsString, fs};
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 
 use crate::{
     cli::{Cli, Command},
@@ -14,8 +16,9 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             domain,
             target,
             artifact,
+            source,
             dry_run,
-        } => deploy(&domain, &target, &artifact, dry_run),
+        } => deploy(&domain, &target, &artifact, &source, dry_run),
         Command::Logs { service } => logs(&service),
         Command::GenerateKey => generate_key(),
     }
@@ -34,8 +37,9 @@ fn init(target: &str, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn deploy(domain: &str, target: &str, artifact: &str, dry_run: bool) -> Result<()> {
+fn deploy(domain: &str, target: &str, artifact: &str, source: &str, dry_run: bool) -> Result<()> {
     println!("[ptto] deploy pipeline planned for domain {domain}");
+    build_go_linux_amd64_binary(source, artifact, dry_run)?;
     let ssh = SshClient::new(target, dry_run);
     ssh.copy_file(Path::new(artifact), "/tmp/ptto-app")?;
     println!("[ptto] artifact staged over ssh at /tmp/ptto-app");
@@ -51,6 +55,62 @@ fn logs(service: &str) -> Result<()> {
 fn generate_key() -> Result<()> {
     println!("[ptto] key generation hook planned for CI/CD");
     Ok(())
+}
+
+fn build_go_linux_amd64_binary(source: &str, artifact: &str, dry_run: bool) -> Result<()> {
+    ensure_artifact_parent_dir(artifact)?;
+    let command_preview = go_build_command_preview(source, artifact);
+    if dry_run {
+        println!("[ptto] dry-run: {command_preview}");
+        return Ok(());
+    }
+
+    println!("[ptto] compiling with: {command_preview}");
+    let status = ProcessCommand::new("go")
+        .env("GOOS", "linux")
+        .env("GOARCH", "amd64")
+        .arg("build")
+        .arg("-o")
+        .arg(artifact)
+        .arg(source)
+        .status()
+        .context("failed to start go build process")?;
+
+    if !status.success() {
+        bail!("go build failed with status {status}");
+    }
+
+    Ok(())
+}
+
+fn ensure_artifact_parent_dir(artifact: &str) -> Result<()> {
+    let artifact_path = Path::new(artifact);
+    if let Some(parent) = artifact_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create parent directory for artifact output: {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn go_build_command_preview(source: &str, artifact: &str) -> String {
+    format!(
+        "GOOS=linux GOARCH=amd64 go build -o {} {}",
+        shell_quote(artifact),
+        shell_quote(source)
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    let quoted = OsString::from(value);
+    format!("{quoted:?}")
 }
 
 fn caddy_init_commands() -> Vec<String> {
@@ -98,7 +158,12 @@ fn caddy_init_commands() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::caddy_init_commands;
+    use std::path::PathBuf;
+
+    use super::{
+        build_go_linux_amd64_binary, caddy_init_commands, ensure_artifact_parent_dir,
+        go_build_command_preview,
+    };
 
     #[test]
     fn caddy_init_contains_install_and_service_steps() {
@@ -110,5 +175,33 @@ mod tests {
         assert!(commands[1].contains("sudo -n true"));
         assert!(commands[0]
             .contains("curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o"));
+    }
+
+    #[test]
+    fn go_build_wrapper_is_dry_run_safe() {
+        let result = build_go_linux_amd64_binary("./cmd/server", "./app", true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn go_build_preview_uses_quoted_values() {
+        let preview = go_build_command_preview("./cmd/my server", "./dist/my app");
+        assert_eq!(
+            preview,
+            "GOOS=linux GOARCH=amd64 go build -o \"./dist/my app\" \"./cmd/my server\""
+        );
+    }
+
+    #[test]
+    fn ensures_artifact_parent_directory_exists() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let artifact_path: PathBuf = temp_dir.path().join("dist").join("app");
+        ensure_artifact_parent_dir(
+            artifact_path
+                .to_str()
+                .expect("artifact path should be valid UTF-8"),
+        )
+        .expect("parent directory should be created");
+        assert!(temp_dir.path().join("dist").exists());
     }
 }

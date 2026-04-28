@@ -12,7 +12,7 @@ The goal is to get from zero to a reliable, production-ready "potato" stack as f
 
 [ ] Server Init: Automate installation of Caddy on the remote VPS.
 
-[ ] Go Compiler Wrapper: Automate GOOS=linux GOARCH=amd64 go build.
+[x] Go Compiler Wrapper: Automate GOOS=linux GOARCH=amd64 go build.
 
 [ ] Systemd Management: Auto-generate and reload systemd service files for the Go binary.
 
