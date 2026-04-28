@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::process::Command as ProcessCommand;
+use std::{ffi::OsString, fs};
 
 use anyhow::{bail, Context, Result};
 
@@ -57,13 +58,14 @@ fn generate_key() -> Result<()> {
 }
 
 fn build_go_linux_amd64_binary(source: &str, artifact: &str, dry_run: bool) -> Result<()> {
-    let command = format!("GOOS=linux GOARCH=amd64 go build -o {artifact} {source}");
+    ensure_artifact_parent_dir(artifact)?;
+    let command_preview = go_build_command_preview(source, artifact);
     if dry_run {
-        println!("[ptto] dry-run: {command}");
+        println!("[ptto] dry-run: {command_preview}");
         return Ok(());
     }
 
-    println!("[ptto] compiling with: {command}");
+    println!("[ptto] compiling with: {command_preview}");
     let status = ProcessCommand::new("go")
         .env("GOOS", "linux")
         .env("GOARCH", "amd64")
@@ -79,6 +81,36 @@ fn build_go_linux_amd64_binary(source: &str, artifact: &str, dry_run: bool) -> R
     }
 
     Ok(())
+}
+
+fn ensure_artifact_parent_dir(artifact: &str) -> Result<()> {
+    let artifact_path = Path::new(artifact);
+    if let Some(parent) = artifact_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create parent directory for artifact output: {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn go_build_command_preview(source: &str, artifact: &str) -> String {
+    format!(
+        "GOOS=linux GOARCH=amd64 go build -o {} {}",
+        shell_quote(artifact),
+        shell_quote(source)
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    let quoted = OsString::from(value);
+    format!("{quoted:?}")
 }
 
 fn caddy_init_commands() -> Vec<String> {
@@ -126,7 +158,12 @@ fn caddy_init_commands() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_go_linux_amd64_binary, caddy_init_commands};
+    use std::path::PathBuf;
+
+    use super::{
+        build_go_linux_amd64_binary, caddy_init_commands, ensure_artifact_parent_dir,
+        go_build_command_preview,
+    };
 
     #[test]
     fn caddy_init_contains_install_and_service_steps() {
@@ -144,5 +181,27 @@ mod tests {
     fn go_build_wrapper_is_dry_run_safe() {
         let result = build_go_linux_amd64_binary("./cmd/server", "./app", true);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn go_build_preview_uses_quoted_values() {
+        let preview = go_build_command_preview("./cmd/my server", "./dist/my app");
+        assert_eq!(
+            preview,
+            "GOOS=linux GOARCH=amd64 go build -o \"./dist/my app\" \"./cmd/my server\""
+        );
+    }
+
+    #[test]
+    fn ensures_artifact_parent_directory_exists() {
+        let temp_dir = tempfile::tempdir().expect("tempdir should be created");
+        let artifact_path: PathBuf = temp_dir.path().join("dist").join("app");
+        ensure_artifact_parent_dir(
+            artifact_path
+                .to_str()
+                .expect("artifact path should be valid UTF-8"),
+        )
+        .expect("parent directory should be created");
+        assert!(temp_dir.path().join("dist").exists());
     }
 }
