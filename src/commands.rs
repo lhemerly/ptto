@@ -43,7 +43,13 @@ fn deploy(domain: &str, target: &str, artifact: &str, source: &str, dry_run: boo
     let ssh = SshClient::new(target, dry_run);
     ssh.copy_file(Path::new(artifact), "/tmp/ptto-app")?;
     println!("[ptto] artifact staged over ssh at /tmp/ptto-app");
-    println!("[ptto] next: build wrapper + systemd + caddy wiring");
+
+    for command in systemd_deploy_commands() {
+        ssh.run(&command)?;
+    }
+
+    println!("[ptto] systemd service generated, reloaded, and restarted");
+    println!("[ptto] next: caddy routing wiring");
     Ok(())
 }
 
@@ -156,13 +162,62 @@ fn caddy_init_commands() -> Vec<String> {
     ]
 }
 
+fn systemd_deploy_commands() -> Vec<String> {
+    vec![
+        concat!(
+            "set -eu; ",
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; ",
+            "elif command -v sudo >/dev/null 2>&1; then ",
+            "if sudo -n true >/dev/null 2>&1; then SUDO=\"sudo\"; ",
+            "else echo \"[ptto] error: passwordless sudo is required for non-interactive deploy\"; exit 1; fi; ",
+            "else echo \"[ptto] error: root or sudo is required\"; exit 1; fi; ",
+            "$SUDO install -d -m 755 /opt/ptto/bin; ",
+            "$SUDO install -m 755 /tmp/ptto-app /opt/ptto/bin/ptto-app"
+        )
+        .to_string(),
+        concat!(
+            "set -eu; ",
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; ",
+            "elif command -v sudo >/dev/null 2>&1; then ",
+            "if sudo -n true >/dev/null 2>&1; then SUDO=\"sudo\"; ",
+            "else echo \"[ptto] error: passwordless sudo is required for non-interactive deploy\"; exit 1; fi; ",
+            "else echo \"[ptto] error: root or sudo is required\"; exit 1; fi; ",
+            "tmp_service=\"$(mktemp)\"; ",
+            "trap 'rm -f \"$tmp_service\"' EXIT; ",
+            "cat > \"$tmp_service\" <<'EOF'\n",
+            "[Unit]\n",
+            "Description=ptto app service\n",
+            "After=network-online.target\n",
+            "Wants=network-online.target\n\n",
+            "[Service]\n",
+            "Type=simple\n",
+            "User=root\n",
+            "WorkingDirectory=/opt/ptto\n",
+            "ExecStart=/opt/ptto/bin/ptto-app\n",
+            "Restart=always\n",
+            "RestartSec=2\n",
+            "Environment=PORT=8080\n\n",
+            "[Install]\n",
+            "WantedBy=multi-user.target\n",
+            "EOF\n",
+            "$SUDO mv \"$tmp_service\" /etc/systemd/system/ptto-app.service; ",
+            "$SUDO chmod 644 /etc/systemd/system/ptto-app.service; ",
+            "$SUDO systemctl daemon-reload; ",
+            "$SUDO systemctl enable --now ptto-app; ",
+            "$SUDO systemctl restart ptto-app; ",
+            "$SUDO systemctl status ptto-app --no-pager --lines=0"
+        )
+        .to_string(),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::{
         build_go_linux_amd64_binary, caddy_init_commands, ensure_artifact_parent_dir,
-        go_build_command_preview,
+        go_build_command_preview, systemd_deploy_commands,
     };
 
     #[test]
@@ -175,6 +230,20 @@ mod tests {
         assert!(commands[1].contains("sudo -n true"));
         assert!(commands[0]
             .contains("curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o"));
+    }
+
+    #[test]
+    fn systemd_deploy_contains_install_and_reload_steps() {
+        let commands = systemd_deploy_commands();
+        assert_eq!(commands.len(), 2);
+        assert!(commands[0].contains("install -m 755 /tmp/ptto-app /opt/ptto/bin/ptto-app"));
+        assert!(commands[1].contains("cat > \"$tmp_service\" <<'EOF'"));
+        assert!(commands[1].contains("ExecStart=/opt/ptto/bin/ptto-app"));
+        assert!(commands[1].contains("systemctl daemon-reload"));
+        assert!(commands[1].contains("systemctl enable --now ptto-app"));
+        assert!(commands[1].contains("systemctl restart ptto-app"));
+        assert!(commands[0].contains("sudo -n true"));
+        assert!(commands[1].contains("sudo -n true"));
     }
 
     #[test]
