@@ -10,7 +10,8 @@ No Kubernetes. No Docker-compose hell. No cloud provider lock-in. No Vercel.
 ## The MVP Stack (Patient Zero)
 
 Right now, ```ptto``` only deploys the most brutally efficient, indestructible stack known to web development: The Single Binary.
-- Language: GoFrontend: HTMX (Server-Side HTML Rendering)
+- Language: Go
+- Frontend: HTMX (Server-Side HTML Rendering)
 - Database: Embedded SQLite
 - Proxy/SSL: Caddy
 
