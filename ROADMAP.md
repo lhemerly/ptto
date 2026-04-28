@@ -10,11 +10,11 @@ The goal is to get from zero to a reliable, production-ready "potato" stack as f
 
 [x] SSH Engine: Implement secure SSH execution and file transfer from local to remote using libssh2 or system ssh.
 
-[ ] Server Init: Automate installation of Caddy on the remote VPS.
+[x] Server Init: Automate installation of Caddy on the remote VPS.
 
 [x] Go Compiler Wrapper: Automate GOOS=linux GOARCH=amd64 go build.
 
-[ ] Systemd Management: Auto-generate and reload systemd service files for the Go binary.
+[x] Systemd Management: Auto-generate and reload systemd service files for the Go binary.
 
 [ ] Caddy Routing: Auto-generate Caddyfile for reverse proxying port 80/443 to the binary's internal port.
 
