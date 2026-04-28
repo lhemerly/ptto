@@ -47,9 +47,12 @@ fn deploy(domain: &str, target: &str, artifact: &str, source: &str, dry_run: boo
     for command in systemd_deploy_commands() {
         ssh.run(&command)?;
     }
+    for command in caddy_routing_commands(domain, 8080) {
+        ssh.run(&command)?;
+    }
 
     println!("[ptto] systemd service generated, reloaded, and restarted");
-    println!("[ptto] next: caddy routing wiring");
+    println!("[ptto] caddy routing generated and reloaded");
     Ok(())
 }
 
@@ -211,13 +214,40 @@ fn systemd_deploy_commands() -> Vec<String> {
     ]
 }
 
+fn caddy_routing_commands(domain: &str, internal_port: u16) -> Vec<String> {
+    vec![format!(
+        concat!(
+            "set -eu; ",
+            "if [ \"$(id -u)\" -eq 0 ]; then SUDO=\"\"; ",
+            "elif command -v sudo >/dev/null 2>&1; then ",
+            "if sudo -n true >/dev/null 2>&1; then SUDO=\"sudo\"; ",
+            "else echo \"[ptto] error: passwordless sudo is required for non-interactive deploy\"; exit 1; fi; ",
+            "else echo \"[ptto] error: root or sudo is required\"; exit 1; fi; ",
+            "tmp_caddy=\"$(mktemp)\"; ",
+            "trap 'rm -f \"$tmp_caddy\"' EXIT; ",
+            "cat > \"$tmp_caddy\" <<'EOF'\n",
+            "{domain} {{\n",
+            "    reverse_proxy 127.0.0.1:{internal_port}\n",
+            "}}\n",
+            "EOF\n",
+            "$SUDO mv \"$tmp_caddy\" /etc/caddy/Caddyfile; ",
+            "$SUDO chmod 644 /etc/caddy/Caddyfile; ",
+            "$SUDO caddy validate --config /etc/caddy/Caddyfile; ",
+            "$SUDO systemctl reload caddy; ",
+            "$SUDO systemctl status caddy --no-pager --lines=0"
+        ),
+        domain = domain,
+        internal_port = internal_port
+    )]
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
     use super::{
-        build_go_linux_amd64_binary, caddy_init_commands, ensure_artifact_parent_dir,
-        go_build_command_preview, systemd_deploy_commands,
+        build_go_linux_amd64_binary, caddy_init_commands, caddy_routing_commands,
+        ensure_artifact_parent_dir, go_build_command_preview, systemd_deploy_commands,
     };
 
     #[test]
@@ -244,6 +274,18 @@ mod tests {
         assert!(commands[1].contains("systemctl restart ptto-app"));
         assert!(commands[0].contains("sudo -n true"));
         assert!(commands[1].contains("sudo -n true"));
+    }
+
+    #[test]
+    fn caddy_routing_contains_reverse_proxy_and_reload_steps() {
+        let commands = caddy_routing_commands("example.com", 8080);
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains("cat > \"$tmp_caddy\" <<'EOF'"));
+        assert!(commands[0].contains("example.com {"));
+        assert!(commands[0].contains("reverse_proxy 127.0.0.1:8080"));
+        assert!(commands[0].contains("caddy validate --config /etc/caddy/Caddyfile"));
+        assert!(commands[0].contains("systemctl reload caddy"));
+        assert!(commands[0].contains("sudo -n true"));
     }
 
     #[test]
