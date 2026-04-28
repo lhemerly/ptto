@@ -21,6 +21,7 @@ If you want microservices or a thick React SPA client, go pay AWS. If you want a
 This repository now includes:
 - A Rust CLI baseline using `clap` + `tokio`.
 - Initial subcommands (`init`, `deploy`, `logs`, `generate-key`) with an SSH/scp execution engine (dry-run friendly).
+- A deploy-time Go compiler wrapper that runs `GOOS=linux GOARCH=amd64 go build`.
 - A PR-focused CI workflow that runs `fmt`, `clippy`, `build`, and `test` automatically.
 
 ## How it works

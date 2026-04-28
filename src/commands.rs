@@ -1,6 +1,7 @@
 use std::path::Path;
+use std::process::Command as ProcessCommand;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 
 use crate::{
     cli::{Cli, Command},
@@ -14,8 +15,9 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             domain,
             target,
             artifact,
+            source,
             dry_run,
-        } => deploy(&domain, &target, &artifact, dry_run),
+        } => deploy(&domain, &target, &artifact, &source, dry_run),
         Command::Logs { service } => logs(&service),
         Command::GenerateKey => generate_key(),
     }
@@ -34,8 +36,9 @@ fn init(target: &str, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn deploy(domain: &str, target: &str, artifact: &str, dry_run: bool) -> Result<()> {
+fn deploy(domain: &str, target: &str, artifact: &str, source: &str, dry_run: bool) -> Result<()> {
     println!("[ptto] deploy pipeline planned for domain {domain}");
+    build_go_linux_amd64_binary(source, artifact, dry_run)?;
     let ssh = SshClient::new(target, dry_run);
     ssh.copy_file(Path::new(artifact), "/tmp/ptto-app")?;
     println!("[ptto] artifact staged over ssh at /tmp/ptto-app");
@@ -50,6 +53,31 @@ fn logs(service: &str) -> Result<()> {
 
 fn generate_key() -> Result<()> {
     println!("[ptto] key generation hook planned for CI/CD");
+    Ok(())
+}
+
+fn build_go_linux_amd64_binary(source: &str, artifact: &str, dry_run: bool) -> Result<()> {
+    let command = format!("GOOS=linux GOARCH=amd64 go build -o {artifact} {source}");
+    if dry_run {
+        println!("[ptto] dry-run: {command}");
+        return Ok(());
+    }
+
+    println!("[ptto] compiling with: {command}");
+    let status = ProcessCommand::new("go")
+        .env("GOOS", "linux")
+        .env("GOARCH", "amd64")
+        .arg("build")
+        .arg("-o")
+        .arg(artifact)
+        .arg(source)
+        .status()
+        .context("failed to start go build process")?;
+
+    if !status.success() {
+        bail!("go build failed with status {status}");
+    }
+
     Ok(())
 }
 
@@ -98,7 +126,7 @@ fn caddy_init_commands() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::caddy_init_commands;
+    use super::{build_go_linux_amd64_binary, caddy_init_commands};
 
     #[test]
     fn caddy_init_contains_install_and_service_steps() {
@@ -110,5 +138,11 @@ mod tests {
         assert!(commands[1].contains("sudo -n true"));
         assert!(commands[0]
             .contains("curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o"));
+    }
+
+    #[test]
+    fn go_build_wrapper_is_dry_run_safe() {
+        let result = build_go_linux_amd64_binary("./cmd/server", "./app", true);
+        assert!(result.is_ok());
     }
 }
