@@ -18,16 +18,30 @@ The goal is to get from zero to a reliable, production-ready "potato" stack as f
 
 [ ] Caddy Routing: Auto-generate Caddyfile for reverse proxying port 80/443 to the binary's internal port.
 
-# Phase 2: Resilience (The Potato Survives)
+Phase 2: The Terminal Dashboard (Local DX)
 
-[ ] Automated Backups: CLI configures a systemd timer on the server to sync the SQLite file to an S3/R2 bucket via a lightweight sync tool.
+We have deployment. Now we need visibility without web-bloat.
+
+[ ] Config Parser: Implement parsing for the .ptto.toml local file to remove the need for CLI flags on every run.
+
+[ ] DB Management Suite: Implement ptto db shell, ptto db pull, and ptto db push using native SSH wrappers.
+
+[ ] Telemetry Wrappers: Implement ptto logs, ptto top, and ptto traffic (automating goaccess installation via init).
+
+Phase 3: Resilience & Automation
+
+Making the potato indestructible.
+
+[ ] Automated Backups: CLI configures a systemd timer on the server to sync the SQLite WAL/file to an S3/R2 bucket (e.g., via Litestream or rclone).
 
 [ ] Zero-Downtime Deploys: Implement a blue-green swap on the server. Spin up the new binary on a random open port, update Caddy, gracefully kill the old process.
 
-[ ] Log Tailing: ptto logs command to stream journalctl logs directly to the local terminal.
+[ ] CI/CD Hook: Create the ptto generate-key workflow and official GitHub Action for headless deployments.
 
-# Phase 3: Language Expansion
+Phase 4: Expansion (The 1-to-Many)
 
-[ ] Rust Server Support: Expand the build step to support compiling Rust web servers (Axum/Actix) via cargo build --target x86_64-unknown-linux-musl.
+Once the 1-VPS-to-1-App model is flawless, we expand.
 
-[ ] Zig / C / Nim: Support any web framework that compiles to a statically linked Linux binary.
+[ ] Multi-Tenancy: Upgrade the server architecture to support multiple .ptto.toml projects on a single potato using Caddy import directories and systemd namespace isolation.
+
+[ ] Language Expansion: Expand the build step to support compiling Rust web servers (Axum/Actix) via cargo build --target x86_64-unknown-linux-musl.
