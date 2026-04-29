@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use predicates::str::contains;
+use tempfile::tempdir;
 
 #[test]
 fn help_shows_manifesto_language() {
@@ -33,4 +34,27 @@ fn deploy_command_supports_ssh_transfer_dry_run() {
     .assert()
     .success()
     .stdout(contains("artifact staged over ssh"));
+}
+
+#[test]
+fn deploy_uses_ptto_toml_defaults() {
+    let dir = tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(".ptto.toml"),
+        r#"host = "root@127.0.0.1"
+domain = "example.com"
+ssh_key = "~/.ssh/custom_key"
+"#,
+    )
+    .expect("config should write");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["deploy", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains("deploy pipeline planned for domain example.com"))
+        .stdout(contains(
+            "scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i ~/.ssh/custom_key",
+        ));
 }
