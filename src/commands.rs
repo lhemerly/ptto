@@ -1,6 +1,6 @@
+use std::fs;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
-use std::{ffi::OsString, fs};
 
 use anyhow::{bail, Context, Result};
 
@@ -39,7 +39,24 @@ pub fn dispatch(cli: Cli) -> Result<()> {
                 dry_run,
             )
         }
-        Command::Logs { service } => logs(&service),
+        Command::Logs { service, target } => {
+            let config = PttoConfig::load()?;
+            let target = resolve_target_for_telemetry(target, &config)?;
+            let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
+            logs(&service, &ssh)
+        }
+        Command::Top { target } => {
+            let config = PttoConfig::load()?;
+            let target = resolve_target_for_telemetry(target, &config)?;
+            let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
+            top(&ssh)
+        }
+        Command::Traffic { target } => {
+            let config = PttoConfig::load()?;
+            let target = resolve_target_for_telemetry(target, &config)?;
+            let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
+            traffic(&ssh)
+        }
         Command::Db { target, command } => {
             let config = PttoConfig::load()?;
             let target = resolve_target_for_db(target, &config)?;
@@ -110,7 +127,7 @@ fn init(target: &str, ssh_key: Option<&str>, dry_run: bool) -> Result<()> {
         ssh.run(&command)?;
     }
 
-    println!("[ptto] server init complete (Caddy installed and started)");
+    println!("[ptto] server init complete (Caddy/goaccess installed and Caddy started)");
     Ok(())
 }
 
@@ -153,15 +170,54 @@ fn resolve_target_for_db(cli_target: Option<String>, config: &PttoConfig) -> Res
         .context("missing SSH target: pass --target to ptto db, or set host in .ptto.toml")
 }
 
+fn resolve_target_for_telemetry(cli_target: Option<String>, config: &PttoConfig) -> Result<String> {
+    cli_target
+        .or_else(|| config.host.clone())
+        .context("missing SSH target: pass --target or set host in .ptto.toml")
+}
+
 fn resolve_domain(cli_domain: Option<String>, config: &PttoConfig) -> Result<String> {
     cli_domain
         .or_else(|| config.domain.clone())
         .context("missing domain: pass --domain or set domain in .ptto.toml")
 }
 
-fn logs(service: &str) -> Result<()> {
-    println!("[ptto] log streaming planned for service {service}");
+fn logs(service: &str, ssh: &SshClient) -> Result<()> {
+    validate_systemd_unit_name(service)?;
+    println!("[ptto] streaming logs for service {service}");
+    ssh.run_interactive(&format!(
+        "set -eu; {}; $SUDO journalctl -u {} -f --no-pager",
+        sudo_prefix("logs"),
+        shell_quote(service)
+    ))
+}
+
+fn validate_systemd_unit_name(service: &str) -> Result<()> {
+    if service.is_empty() || service.len() > 256 {
+        bail!("invalid service name: expected 1-256 characters");
+    }
+    if !service
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '_' | '.' | '@' | '-'))
+    {
+        bail!("invalid service name: allowed characters are A-Z a-z 0-9 : _ . @ -");
+    }
     Ok(())
+}
+
+fn top(ssh: &SshClient) -> Result<()> {
+    println!("[ptto] opening remote process dashboard");
+    ssh.run_interactive(
+        "set -eu; if command -v htop >/dev/null 2>&1; then exec htop; elif command -v btop >/dev/null 2>&1; then exec btop; elif command -v top >/dev/null 2>&1; then exec top; else echo '[ptto] error: no top utility found (expected htop, btop, or top)'; exit 1; fi",
+    )
+}
+
+fn traffic(ssh: &SshClient) -> Result<()> {
+    println!("[ptto] streaming caddy access telemetry via goaccess");
+    ssh.run_interactive(&format!(
+        "set -eu; {}; if ! command -v goaccess >/dev/null 2>&1; then echo '[ptto] error: goaccess is not installed (run ptto init)'; exit 1; fi; if [ -f /var/log/caddy/ptto-access.log ]; then log_file=/var/log/caddy/ptto-access.log; elif [ -f /var/log/caddy/access.log ]; then log_file=/var/log/caddy/access.log; else echo '[ptto] error: no Caddy access log found at /var/log/caddy/ptto-access.log or /var/log/caddy/access.log'; exit 1; fi; $SUDO test -r \"$log_file\"; $SUDO tail -F \"$log_file\" | goaccess --log-format=CADDY -",
+        sudo_prefix("traffic")
+    ))
 }
 
 fn generate_key() -> Result<()> {
@@ -221,8 +277,7 @@ fn go_build_command_preview(source: &str, artifact: &str) -> String {
 }
 
 fn shell_quote(value: &str) -> String {
-    let quoted = OsString::from(value);
-    format!("{quoted:?}")
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn caddy_init_commands() -> Vec<String> {
@@ -233,6 +288,11 @@ fn caddy_init_commands() -> Vec<String> {
                 "{}",
                 "if command -v caddy >/dev/null 2>&1; then ",
                 "echo \"[ptto] Caddy already installed\"; ",
+                "if ! command -v goaccess >/dev/null 2>&1; then ",
+                "if ! command -v apt-get >/dev/null 2>&1; then ",
+                "echo \"[ptto] error: goaccess install requires apt-get (Ubuntu/Debian)\"; exit 1; ",
+                "fi; ",
+                "$SUDO apt-get update; $SUDO apt-get install -y goaccess; fi; ",
                 "else ",
                 "if ! command -v apt-get >/dev/null 2>&1; then ",
                 "echo \"[ptto] error: apt-get is required (Ubuntu/Debian)\"; exit 1; ",
@@ -247,7 +307,7 @@ fn caddy_init_commands() -> Vec<String> {
                 "$SUDO gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \"$tmp_gpg\"; ",
                 "$SUDO mv \"$tmp_list\" /etc/apt/sources.list.d/caddy-stable.list; ",
                 "$SUDO apt-get update; ",
-                "$SUDO apt-get install -y caddy; ",
+                "$SUDO apt-get install -y caddy goaccess; ",
                 "fi"
             ),
             sudo_prefix("init")
@@ -311,7 +371,9 @@ fn systemd_deploy_commands(internal_port: u16) -> Vec<String> {
 }
 
 fn caddy_routing_commands(domain: &str, internal_port: u16) -> Vec<String> {
-    let caddyfile = format!("{domain} {{\n    reverse_proxy 127.0.0.1:{internal_port}\n}}\n");
+    let caddyfile = format!(
+        "{domain} {{\n    reverse_proxy 127.0.0.1:{internal_port}\n    log {{\n        output file /var/log/caddy/ptto-access.log\n        format console\n    }}\n}}\n"
+    );
     vec![format!(
         concat!(
             "set -eu; ",
@@ -395,14 +457,17 @@ mod tests {
     use super::{
         build_go_linux_amd64_binary, caddy_init_commands, caddy_routing_commands,
         ensure_artifact_parent_dir, go_build_command_preview, resolve_domain, resolve_target,
-        resolve_target_for_db, systemd_deploy_commands, validate_domain, PttoConfig,
+        resolve_target_for_db, resolve_target_for_telemetry, systemd_deploy_commands,
+        validate_domain, validate_systemd_unit_name, PttoConfig,
     };
 
     #[test]
     fn caddy_init_contains_install_and_service_steps() {
         let commands = caddy_init_commands();
         assert_eq!(commands.len(), 2);
-        assert!(commands[0].contains("apt-get install -y caddy"));
+        assert!(commands[0].contains("apt-get install -y caddy goaccess"));
+        assert!(commands[0].contains("command -v goaccess"));
+        assert!(commands[0].contains("goaccess install requires apt-get"));
         assert!(commands[1].contains("systemctl enable --now caddy"));
         assert!(commands[0].contains("sudo -n true"));
         assert!(commands[1].contains("sudo -n true"));
@@ -430,8 +495,8 @@ mod tests {
         let commands = caddy_routing_commands("example.com", 8080);
         assert_eq!(commands.len(), 1);
         assert!(commands[0].contains("printf '%s'"));
-        assert!(commands[0].contains("example.com {\\n    reverse_proxy 127.0.0.1:8080\\n}\\n"));
         assert!(commands[0].contains("reverse_proxy 127.0.0.1:8080"));
+        assert!(commands[0].contains("output file /var/log/caddy/ptto-access.log"));
         assert!(commands[0].contains("caddy validate --config \"$tmp_caddy\""));
         assert!(commands[0].contains("cp /etc/caddy/Caddyfile"));
         assert!(commands[0].contains("systemctl reload caddy"));
@@ -507,8 +572,15 @@ mod tests {
         let preview = go_build_command_preview("./cmd/my server", "./dist/my app");
         assert_eq!(
             preview,
-            "GOOS=linux GOARCH=amd64 go build -o \"./dist/my app\" \"./cmd/my server\""
+            "GOOS=linux GOARCH=amd64 go build -o './dist/my app' './cmd/my server'"
         );
+    }
+
+    #[test]
+    fn systemd_service_name_validation_rejects_shell_metacharacters() {
+        let err = validate_systemd_unit_name("ptto-app$(touch /tmp/pwn)")
+            .expect_err("service name should be rejected");
+        assert!(err.to_string().contains("invalid service name"));
     }
 
     #[test]
@@ -536,11 +608,15 @@ mod tests {
             .expect("target should resolve from cli");
         let db_target = resolve_target_for_db(Some("root@db-cli".to_string()), &config)
             .expect("db target should resolve from cli");
+        let telemetry_target =
+            resolve_target_for_telemetry(Some("root@telemetry-cli".to_string()), &config)
+                .expect("telemetry target should resolve from cli");
         let domain =
             resolve_domain(Some("from-cli.example.com".to_string()), &config).expect("domain");
 
         assert_eq!(target, "root@from-cli");
         assert_eq!(db_target, "root@db-cli");
+        assert_eq!(telemetry_target, "root@telemetry-cli");
         assert_eq!(domain, "from-cli.example.com");
     }
 
@@ -555,10 +631,13 @@ mod tests {
         let target = resolve_target(None, &config).expect("target should come from config");
         let db_target =
             resolve_target_for_db(None, &config).expect("db target should come from config");
+        let telemetry_target = resolve_target_for_telemetry(None, &config)
+            .expect("telemetry target should come from config");
         let domain = resolve_domain(None, &config).expect("domain should come from config");
 
         assert_eq!(target, "root@config-host");
         assert_eq!(db_target, "root@config-host");
+        assert_eq!(telemetry_target, "root@config-host");
         assert_eq!(domain, "config.example.com");
     }
 
@@ -569,6 +648,8 @@ mod tests {
         let target_error = resolve_target(None, &config).expect_err("target should be required");
         let db_error =
             resolve_target_for_db(None, &config).expect_err("db target should be required");
+        let telemetry_error = resolve_target_for_telemetry(None, &config)
+            .expect_err("telemetry target should be required");
         let domain_error = resolve_domain(None, &config).expect_err("domain should be required");
 
         let target_error_text = target_error.to_string();
@@ -578,6 +659,7 @@ mod tests {
         assert!(target_error_text.contains("--target"));
         assert!(target_error_text.contains(".ptto.toml"));
         assert!(db_error.to_string().contains("pass --target to ptto db"));
+        assert!(telemetry_error.to_string().contains("pass --target"));
         assert!(domain_error_text.contains("missing domain"));
         assert!(domain_error_text.contains("--domain"));
         assert!(domain_error_text.contains(".ptto.toml"));
