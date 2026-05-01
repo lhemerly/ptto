@@ -1,6 +1,6 @@
+use std::fs;
 use std::path::Path;
 use std::process::Command as ProcessCommand;
-use std::{ffi::OsString, fs};
 
 use anyhow::{bail, Context, Result};
 
@@ -183,6 +183,7 @@ fn resolve_domain(cli_domain: Option<String>, config: &PttoConfig) -> Result<Str
 }
 
 fn logs(service: &str, ssh: &SshClient) -> Result<()> {
+    validate_systemd_unit_name(service)?;
     println!("[ptto] streaming logs for service {service}");
     ssh.run_interactive(&format!(
         "set -eu; {}; $SUDO journalctl -u {} -f --no-pager",
@@ -191,18 +192,30 @@ fn logs(service: &str, ssh: &SshClient) -> Result<()> {
     ))
 }
 
+fn validate_systemd_unit_name(service: &str) -> Result<()> {
+    if service.is_empty() || service.len() > 256 {
+        bail!("invalid service name: expected 1-256 characters");
+    }
+    if !service
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '_' | '.' | '@' | '-'))
+    {
+        bail!("invalid service name: allowed characters are A-Z a-z 0-9 : _ . @ -");
+    }
+    Ok(())
+}
+
 fn top(ssh: &SshClient) -> Result<()> {
     println!("[ptto] opening remote process dashboard");
-    ssh.run_interactive(&format!(
-        "set -eu; {}; if command -v htop >/dev/null 2>&1; then exec htop; elif command -v btop >/dev/null 2>&1; then exec btop; elif command -v top >/dev/null 2>&1; then exec top; else echo '[ptto] error: no top utility found (expected htop, btop, or top)'; exit 1; fi",
-        sudo_prefix("top")
-    ))
+    ssh.run_interactive(
+        "set -eu; if command -v htop >/dev/null 2>&1; then exec htop; elif command -v btop >/dev/null 2>&1; then exec btop; elif command -v top >/dev/null 2>&1; then exec top; else echo '[ptto] error: no top utility found (expected htop, btop, or top)'; exit 1; fi",
+    )
 }
 
 fn traffic(ssh: &SshClient) -> Result<()> {
     println!("[ptto] streaming caddy access telemetry via goaccess");
     ssh.run_interactive(&format!(
-        "set -eu; {}; if ! command -v goaccess >/dev/null 2>&1; then echo '[ptto] error: goaccess is not installed (run ptto init)'; exit 1; fi; if [ -f /var/log/caddy/access.log ]; then log_file=/var/log/caddy/access.log; elif [ -f /var/log/caddy/ptto-access.log ]; then log_file=/var/log/caddy/ptto-access.log; else echo '[ptto] error: no Caddy access log found at /var/log/caddy/access.log'; exit 1; fi; $SUDO test -r \"$log_file\"; $SUDO sh -c \"tail -F '$log_file' | goaccess --log-format=CADDY --real-time-html -o -\"",
+        "set -eu; {}; if ! command -v goaccess >/dev/null 2>&1; then echo '[ptto] error: goaccess is not installed (run ptto init)'; exit 1; fi; if [ -f /var/log/caddy/ptto-access.log ]; then log_file=/var/log/caddy/ptto-access.log; elif [ -f /var/log/caddy/access.log ]; then log_file=/var/log/caddy/access.log; else echo '[ptto] error: no Caddy access log found at /var/log/caddy/ptto-access.log or /var/log/caddy/access.log'; exit 1; fi; $SUDO test -r \"$log_file\"; $SUDO tail -F \"$log_file\" | goaccess --log-format=CADDY -",
         sudo_prefix("traffic")
     ))
 }
@@ -264,8 +277,7 @@ fn go_build_command_preview(source: &str, artifact: &str) -> String {
 }
 
 fn shell_quote(value: &str) -> String {
-    let quoted = OsString::from(value);
-    format!("{quoted:?}")
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn caddy_init_commands() -> Vec<String> {
@@ -276,7 +288,11 @@ fn caddy_init_commands() -> Vec<String> {
                 "{}",
                 "if command -v caddy >/dev/null 2>&1; then ",
                 "echo \"[ptto] Caddy already installed\"; ",
-                "if ! command -v goaccess >/dev/null 2>&1; then $SUDO apt-get update; $SUDO apt-get install -y goaccess; fi; ",
+                "if ! command -v goaccess >/dev/null 2>&1; then ",
+                "if ! command -v apt-get >/dev/null 2>&1; then ",
+                "echo \"[ptto] error: goaccess install requires apt-get (Ubuntu/Debian)\"; exit 1; ",
+                "fi; ",
+                "$SUDO apt-get update; $SUDO apt-get install -y goaccess; fi; ",
                 "else ",
                 "if ! command -v apt-get >/dev/null 2>&1; then ",
                 "echo \"[ptto] error: apt-get is required (Ubuntu/Debian)\"; exit 1; ",
@@ -355,7 +371,9 @@ fn systemd_deploy_commands(internal_port: u16) -> Vec<String> {
 }
 
 fn caddy_routing_commands(domain: &str, internal_port: u16) -> Vec<String> {
-    let caddyfile = format!("{domain} {{\n    reverse_proxy 127.0.0.1:{internal_port}\n}}\n");
+    let caddyfile = format!(
+        "{domain} {{\n    reverse_proxy 127.0.0.1:{internal_port}\n    log {{\n        output file /var/log/caddy/ptto-access.log\n        format console\n    }}\n}}\n"
+    );
     vec![format!(
         concat!(
             "set -eu; ",
@@ -440,7 +458,7 @@ mod tests {
         build_go_linux_amd64_binary, caddy_init_commands, caddy_routing_commands,
         ensure_artifact_parent_dir, go_build_command_preview, resolve_domain, resolve_target,
         resolve_target_for_db, resolve_target_for_telemetry, systemd_deploy_commands,
-        validate_domain, PttoConfig,
+        validate_domain, validate_systemd_unit_name, PttoConfig,
     };
 
     #[test]
@@ -449,6 +467,7 @@ mod tests {
         assert_eq!(commands.len(), 2);
         assert!(commands[0].contains("apt-get install -y caddy goaccess"));
         assert!(commands[0].contains("command -v goaccess"));
+        assert!(commands[0].contains("goaccess install requires apt-get"));
         assert!(commands[1].contains("systemctl enable --now caddy"));
         assert!(commands[0].contains("sudo -n true"));
         assert!(commands[1].contains("sudo -n true"));
@@ -476,8 +495,8 @@ mod tests {
         let commands = caddy_routing_commands("example.com", 8080);
         assert_eq!(commands.len(), 1);
         assert!(commands[0].contains("printf '%s'"));
-        assert!(commands[0].contains("example.com {\\n    reverse_proxy 127.0.0.1:8080\\n}\\n"));
         assert!(commands[0].contains("reverse_proxy 127.0.0.1:8080"));
+        assert!(commands[0].contains("output file /var/log/caddy/ptto-access.log"));
         assert!(commands[0].contains("caddy validate --config \"$tmp_caddy\""));
         assert!(commands[0].contains("cp /etc/caddy/Caddyfile"));
         assert!(commands[0].contains("systemctl reload caddy"));
@@ -553,8 +572,15 @@ mod tests {
         let preview = go_build_command_preview("./cmd/my server", "./dist/my app");
         assert_eq!(
             preview,
-            "GOOS=linux GOARCH=amd64 go build -o \"./dist/my app\" \"./cmd/my server\""
+            "GOOS=linux GOARCH=amd64 go build -o './dist/my app' './cmd/my server'"
         );
+    }
+
+    #[test]
+    fn systemd_service_name_validation_rejects_shell_metacharacters() {
+        let err = validate_systemd_unit_name("ptto-app$(touch /tmp/pwn)")
+            .expect_err("service name should be rejected");
+        assert!(err.to_string().contains("invalid service name"));
     }
 
     #[test]
