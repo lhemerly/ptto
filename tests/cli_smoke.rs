@@ -86,3 +86,14 @@ fn generate_key_does_not_require_or_parse_ptto_toml() {
         .success()
         .stdout(contains("key generation hook planned for CI/CD"));
 }
+
+#[test]
+fn db_help_lists_management_commands() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.args(["db", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("shell"))
+        .stdout(contains("pull"))
+        .stdout(contains("push"));
+}

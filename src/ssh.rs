@@ -61,6 +61,30 @@ impl SshClient {
 
         Ok(())
     }
+
+    pub fn copy_file_from_remote(&self, remote_path: &str, local_file: &Path) -> Result<()> {
+        let args = build_scp_from_remote_args(
+            &self.target,
+            self.ssh_key.as_deref(),
+            remote_path,
+            local_file,
+        )?;
+        if self.dry_run {
+            println!("[ptto] dry-run: scp {}", args.join(" "));
+            return Ok(());
+        }
+
+        let status = Command::new("scp")
+            .args(&args)
+            .status()
+            .context("failed to start scp process")?;
+
+        if !status.success() {
+            bail!("scp command failed with status {status}");
+        }
+
+        Ok(())
+    }
 }
 
 fn build_ssh_args(target: &str, ssh_key: Option<&str>, remote_command: &str) -> Vec<String> {
@@ -107,11 +131,38 @@ fn build_scp_args(
     Ok(args)
 }
 
+fn build_scp_from_remote_args(
+    target: &str,
+    ssh_key: Option<&str>,
+    remote_path: &str,
+    local_file: &Path,
+) -> Result<Vec<String>> {
+    let local_file = local_file
+        .to_str()
+        .context("local file path contains unsupported UTF-8")?;
+
+    let mut args = vec![
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+    ];
+    if let Some(key) = ssh_key {
+        args.push("-i".to_string());
+        args.push(key.to_string());
+    }
+    args.push("--".to_string());
+    args.push(format!("{target}:{remote_path}"));
+    args.push(local_file.to_string());
+
+    Ok(args)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{build_scp_args, build_ssh_args};
+    use super::{build_scp_args, build_scp_from_remote_args, build_ssh_args};
 
     #[test]
     fn ssh_args_include_safety_flags() {
@@ -153,5 +204,28 @@ mod tests {
         let args = build_ssh_args("root@example.com", Some("~/.ssh/key"), "echo ok");
         assert!(args.windows(2).any(|w| w == ["-i", "~/.ssh/key"]));
         assert!(args.contains(&"--".to_string()));
+    }
+
+    #[test]
+    fn scp_pull_args_include_source_and_target() {
+        let args = build_scp_from_remote_args(
+            "deployer@example.com",
+            None,
+            "/tmp/app",
+            Path::new("./app"),
+        )
+        .expect("valid args");
+        assert_eq!(
+            args,
+            vec![
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "--",
+                "deployer@example.com:/tmp/app",
+                "./app"
+            ]
+        );
     }
 }
