@@ -21,40 +21,12 @@ impl SshClient {
 
     pub fn run(&self, remote_command: &str) -> Result<()> {
         let args = build_ssh_args(&self.target, self.ssh_key.as_deref(), remote_command);
-        if self.dry_run {
-            println!("[ptto] dry-run: ssh {}", args.join(" "));
-            return Ok(());
-        }
-
-        let status = Command::new("ssh")
-            .args(&args)
-            .status()
-            .context("failed to start ssh process")?;
-
-        if !status.success() {
-            bail!("ssh command failed with status {status}");
-        }
-
-        Ok(())
+        self.execute_ssh(&args)
     }
 
     pub fn run_interactive(&self, remote_command: &str) -> Result<()> {
         let args = build_ssh_args_with_tty(&self.target, self.ssh_key.as_deref(), remote_command);
-        if self.dry_run {
-            println!("[ptto] dry-run: ssh {}", args.join(" "));
-            return Ok(());
-        }
-
-        let status = Command::new("ssh")
-            .args(&args)
-            .status()
-            .context("failed to start ssh process")?;
-
-        if !status.success() {
-            bail!("ssh command failed with status {status}");
-        }
-
-        Ok(())
+        self.execute_ssh(&args)
     }
 
     pub fn copy_file(&self, local_file: &Path, remote_path: &str) -> Result<()> {
@@ -64,21 +36,7 @@ impl SshClient {
             local_file,
             remote_path,
         )?;
-        if self.dry_run {
-            println!("[ptto] dry-run: scp {}", args.join(" "));
-            return Ok(());
-        }
-
-        let status = Command::new("scp")
-            .args(&args)
-            .status()
-            .context("failed to start scp process")?;
-
-        if !status.success() {
-            bail!("scp command failed with status {status}");
-        }
-
-        Ok(())
+        self.execute_scp(&args)
     }
 
     pub fn copy_file_from_remote(&self, remote_path: &str, local_file: &Path) -> Result<()> {
@@ -88,13 +46,35 @@ impl SshClient {
             remote_path,
             local_file,
         )?;
+        self.execute_scp(&args)
+    }
+
+    fn execute_ssh(&self, args: &[String]) -> Result<()> {
+        if self.dry_run {
+            println!("[ptto] dry-run: ssh {}", args.join(" "));
+            return Ok(());
+        }
+
+        let status = Command::new("ssh")
+            .args(args)
+            .status()
+            .context("failed to start ssh process")?;
+
+        if !status.success() {
+            bail!("ssh command failed with status {status}");
+        }
+
+        Ok(())
+    }
+
+    fn execute_scp(&self, args: &[String]) -> Result<()> {
         if self.dry_run {
             println!("[ptto] dry-run: scp {}", args.join(" "));
             return Ok(());
         }
 
         let status = Command::new("scp")
-            .args(&args)
+            .args(args)
             .status()
             .context("failed to start scp process")?;
 
