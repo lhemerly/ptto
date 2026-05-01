@@ -23,10 +23,12 @@ impl PttoConfig {
         let raw = match fs::read_to_string(path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Self::default()),
-            Err(error) => return Err(error).with_context(|| format!("failed to read {}", path.display())),
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", path.display()))
+            }
         };
-        let config: PttoConfig = toml::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
+        let config: PttoConfig =
+            toml::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))?;
         Ok(config)
     }
 }
