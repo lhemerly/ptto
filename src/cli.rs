@@ -45,6 +45,32 @@ pub enum Command {
         #[arg(default_value = "ptto-app")]
         service: String,
     },
+    /// Manage remote SQLite database
+    Db {
+        /// SSH target in user@host format
+        #[arg(long)]
+        target: Option<String>,
+        #[command(subcommand)]
+        command: DbCommand,
+    },
     /// Generate a deploy key string for CI usage
     GenerateKey,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DbCommand {
+    /// Open a remote sqlite3 shell session
+    Shell,
+    /// Copy remote database to a local file
+    Pull {
+        /// Local destination path
+        #[arg(default_value = "./database.sqlite")]
+        local_path: String,
+    },
+    /// Copy a local database file to the remote host
+    Push {
+        /// Local source path
+        #[arg(default_value = "./database.sqlite")]
+        local_path: String,
+    },
 }

@@ -5,12 +5,13 @@ use std::{ffi::OsString, fs};
 use anyhow::{bail, Context, Result};
 
 use crate::{
-    cli::{Cli, Command},
+    cli::{Cli, Command, DbCommand},
     config::PttoConfig,
     ssh::SshClient,
 };
 
 const APP_INTERNAL_PORT: u16 = 8080;
+const REMOTE_DB_PATH: &str = "/opt/ptto/data/database.sqlite";
 
 pub fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
@@ -39,7 +40,64 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             )
         }
         Command::Logs { service } => logs(&service),
+        Command::Db { target, command } => {
+            let config = PttoConfig::load()?;
+            let target = resolve_target_for_db(target, &config)?;
+            let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
+            db(command, &ssh)
+        }
         Command::GenerateKey => generate_key(),
+    }
+}
+
+fn db(command: DbCommand, ssh: &SshClient) -> Result<()> {
+    match command {
+        DbCommand::Shell => {
+            println!("[ptto] opening remote sqlite shell at {REMOTE_DB_PATH}");
+            ssh.run_interactive(&format!(
+                "set -eu; {}; $SUDO sqlite3 {}",
+                sudo_prefix("db shell"),
+                shell_quote(REMOTE_DB_PATH)
+            ))
+        }
+        DbCommand::Pull { local_path } => {
+            println!("[ptto] pulling remote database from {REMOTE_DB_PATH} to {local_path}");
+            ensure_artifact_parent_dir(&local_path)?;
+            let temp_remote = "/tmp/ptto-db-pull.sqlite";
+            ssh.run(&format!(
+                concat!("set -eu; ", "{}", "$SUDO install -m 600 {} {};"),
+                sudo_prefix("db pull"),
+                shell_quote(REMOTE_DB_PATH),
+                shell_quote(temp_remote)
+            ))?;
+            let copy_result = ssh.copy_file_from_remote(temp_remote, Path::new(&local_path));
+            let cleanup_result = ssh.run(&format!("set -eu; rm -f {}", shell_quote(temp_remote)));
+            copy_result?;
+            cleanup_result
+        }
+        DbCommand::Push { local_path } => {
+            println!("[ptto] pushing local database {local_path} to {REMOTE_DB_PATH}");
+            let local = Path::new(&local_path);
+            if !local.exists() {
+                bail!("local database file does not exist: {}", local.display());
+            }
+            ssh.copy_file(local, "/tmp/ptto-database.sqlite")?;
+            ssh.run(&format!(
+                concat!(
+                    "set -eu; ",
+                    "{}",
+                    "$SUDO install -d -m 755 /opt/ptto/data; ",
+                    "$SUDO systemctl stop ptto-app; ",
+                    "trap '$SUDO systemctl start ptto-app' EXIT; ",
+                    "tmp_db=\"/opt/ptto/data/.database.sqlite.ptto-tmp-$$\"; ",
+                    "$SUDO install -m 640 /tmp/ptto-database.sqlite \"$tmp_db\"; ",
+                    "$SUDO mv -f \"$tmp_db\" {}; ",
+                    "$SUDO rm -f /tmp/ptto-database.sqlite"
+                ),
+                sudo_prefix("db push"),
+                shell_quote(REMOTE_DB_PATH)
+            ))
+        }
     }
 }
 
@@ -87,6 +145,12 @@ fn resolve_target(cli_target: Option<String>, config: &PttoConfig) -> Result<Str
     cli_target
         .or_else(|| config.host.clone())
         .context("missing SSH target: pass --target (deploy) or positional target (init), or set host in .ptto.toml")
+}
+
+fn resolve_target_for_db(cli_target: Option<String>, config: &PttoConfig) -> Result<String> {
+    cli_target
+        .or_else(|| config.host.clone())
+        .context("missing SSH target: pass --target to ptto db, or set host in .ptto.toml")
 }
 
 fn resolve_domain(cli_domain: Option<String>, config: &PttoConfig) -> Result<String> {
