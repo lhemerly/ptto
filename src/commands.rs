@@ -10,7 +10,6 @@ use crate::{
     ssh::SshClient,
 };
 
-const APP_INTERNAL_PORT: u16 = 8080;
 const REMOTE_DB_PATH: &str = "/opt/ptto/data/database.sqlite";
 
 pub fn dispatch(cli: Cli) -> Result<()> {
@@ -145,13 +144,11 @@ fn deploy(
     ssh.copy_file(Path::new(artifact), "/tmp/ptto-app")?;
     println!("[ptto] artifact staged over ssh at /tmp/ptto-app");
 
-    let mut deploy_commands = systemd_deploy_commands(APP_INTERNAL_PORT);
-    deploy_commands.extend(caddy_routing_commands(domain, APP_INTERNAL_PORT));
+    let deploy_commands = blue_green_deploy_commands(domain);
     let commands = deploy_commands.join("\n");
     ssh.run(&commands)?;
 
-    println!("[ptto] systemd service generated, reloaded, and restarted");
-    println!("[ptto] caddy routing generated and reloaded");
+    println!("[ptto] blue-green deployment completed with graceful handoff");
     Ok(())
 }
 
@@ -321,77 +318,45 @@ fn caddy_init_commands() -> Vec<String> {
     ]
 }
 
-fn systemd_deploy_commands(internal_port: u16) -> Vec<String> {
-    vec![
-        format!(
-            concat!(
-                "set -eu; ",
-                "{}",
-                "$SUDO install -d -m 755 /opt/ptto/bin; ",
-                "$SUDO install -m 755 /tmp/ptto-app /opt/ptto/bin/ptto-app"
-            ),
-            sudo_prefix("deploy")
-        ),
-        format!(
-            concat!(
-                "set -eu; ",
-                "{}",
-                "tmp_service=\"$(mktemp)\"; ",
-                "trap 'rm -f \"$tmp_service\"' EXIT; ",
-                "cat > \"$tmp_service\" <<'EOF'\n",
-                "[Unit]\n",
-                "Description=ptto app service\n",
-                "After=network-online.target\n",
-                "Wants=network-online.target\n\n",
-                "[Service]\n",
-                "Type=simple\n",
-                "User=root\n",
-                "WorkingDirectory=/opt/ptto\n",
-                "ExecStart=/opt/ptto/bin/ptto-app\n",
-                "Restart=always\n",
-                "RestartSec=2\n",
-                "Environment=PORT={internal_port}\n\n",
-                "[Install]\n",
-                "WantedBy=multi-user.target\n",
-                "EOF\n",
-                "$SUDO mv \"$tmp_service\" /etc/systemd/system/ptto-app.service; ",
-                "$SUDO chmod 644 /etc/systemd/system/ptto-app.service; ",
-                "$SUDO systemctl daemon-reload; ",
-                "$SUDO systemctl enable --now ptto-app; ",
-                "$SUDO systemctl restart ptto-app; ",
-                "$SUDO systemctl status ptto-app --no-pager --lines=0"
-            ),
-            sudo_prefix("deploy"),
-            internal_port = internal_port
-        ),
-    ]
-}
-
-fn caddy_routing_commands(domain: &str, internal_port: u16) -> Vec<String> {
-    let caddyfile = format!(
-        "{domain} {{\n    reverse_proxy 127.0.0.1:{internal_port}\n    log {{\n        output file /var/log/caddy/ptto-access.log\n        format console\n    }}\n}}\n"
-    );
+fn blue_green_deploy_commands(domain: &str) -> Vec<String> {
+    let caddy_template = shell_quote(&caddyfile_for_port(domain, "__PTTO_PORT__"));
     vec![format!(
         concat!(
-            "set -eu; ",
-            "{}",
-            "tmp_caddy=\"$(mktemp)\"; ",
-            "trap 'rm -f \"$tmp_caddy\"' EXIT; ",
-            "printf '%s' {} > \"$tmp_caddy\"; ",
+            "set -eu; {}",
+            "$SUDO install -d -m 755 /opt/ptto/bin /opt/ptto/run; ",
+            "release=\"$(date +%Y%m%d%H%M%S)-$$\"; ",
+            "new_bin=\"/opt/ptto/bin/ptto-app-$release\"; ",
+            "$SUDO install -m 755 /tmp/ptto-app \"$new_bin\"; ",
+            "pick_port() {{ while :; do p=\"$(shuf -i 20000-45000 -n 1)\"; if ! ss -ltn \"( sport = :$p )\" | grep -q LISTEN; then echo \"$p\"; return 0; fi; done; }}; ",
+            "new_port=\"$(pick_port)\"; new_pid_file=\"/opt/ptto/run/ptto-app.next.pid\"; ",
+            "$SUDO sh -c \"PORT=$new_port nohup '$new_bin' >/var/log/ptto-app.log 2>&1 & echo \\$! > '$new_pid_file'\"; ",
+            "attempt=0; until curl -fsS \"http://127.0.0.1:$new_port\" >/dev/null 2>&1 || [ \"$attempt\" -ge 20 ]; do attempt=\"$((attempt+1))\"; sleep 0.5; done; ",
+            "if ! curl -fsS \"http://127.0.0.1:$new_port\" >/dev/null 2>&1; then echo \"[ptto] error: new release failed health check\"; new_pid=\"$($SUDO cat \"$new_pid_file\")\"; $SUDO kill \"$new_pid\" >/dev/null 2>&1 || true; $SUDO rm -f \"$new_pid_file\"; exit 1; fi; ",
+            "tmp_caddy=\"$(mktemp)\"; trap 'rm -f \"$tmp_caddy\"' EXIT; ",
+            "printf '%s' {} | sed \"s/__PTTO_PORT__/$new_port/g\" > \"$tmp_caddy\"; ",
             "$SUDO caddy validate --config \"$tmp_caddy\"; ",
-            "backup_dir=\"/etc/caddy/backups\"; ",
-            "if [ -f /etc/caddy/Caddyfile ]; then ",
-            "$SUDO install -d -m 755 \"$backup_dir\"; ",
-            "$SUDO cp /etc/caddy/Caddyfile \"$backup_dir/Caddyfile.$(date +%Y%m%d%H%M%S).bak\"; ",
-            "fi; ",
-            "$SUDO mv \"$tmp_caddy\" /etc/caddy/Caddyfile; ",
-            "$SUDO chmod 644 /etc/caddy/Caddyfile; ",
-            "$SUDO systemctl reload caddy; ",
-            "$SUDO systemctl status caddy --no-pager --lines=0"
+            "backup_dir=\"/etc/caddy/backups\"; if [ -f /etc/caddy/Caddyfile ]; then $SUDO install -d -m 755 \"$backup_dir\"; $SUDO cp /etc/caddy/Caddyfile \"$backup_dir/Caddyfile.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
+            "$SUDO mv \"$tmp_caddy\" /etc/caddy/Caddyfile; $SUDO chmod 644 /etc/caddy/Caddyfile; $SUDO systemctl reload caddy; ",
+            "if $SUDO test -f /opt/ptto/run/ptto-app.pid; then old_pid=\"$($SUDO cat /opt/ptto/run/ptto-app.pid)\"; if [ -n \"$old_pid\" ] && kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -TERM \"$old_pid\" || true; for _ in $(seq 1 20); do if ! kill -0 \"$old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; if kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$old_pid\" || true; fi; fi; fi; ",
+            "$SUDO mv \"$new_pid_file\" /opt/ptto/run/ptto-app.pid; $SUDO sh -c \"echo '$new_port' > /opt/ptto/run/ptto-app.port\"; ",
+            "$SUDO ln -sfn \"$new_bin\" /opt/ptto/bin/ptto-app; $SUDO systemctl status caddy --no-pager --lines=0"
         ),
         sudo_prefix("deploy"),
-        shell_quote(&caddyfile)
+        caddy_template
     )]
+}
+
+fn caddyfile_for_port(domain: &str, port_expr: &str) -> String {
+    format!(
+        "{domain} {{
+    reverse_proxy 127.0.0.1:{port_expr}
+    log {{
+        output file /var/log/caddy/ptto-access.log
+        format console
+    }}
+}}
+"
+    )
 }
 
 fn sudo_prefix(phase: &str) -> String {
@@ -452,10 +417,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        build_go_linux_amd64_binary, caddy_init_commands, caddy_routing_commands,
-        ensure_artifact_parent_dir, go_build_command_preview, resolve_domain, resolve_target,
-        resolve_target_for_db, resolve_target_for_telemetry, systemd_deploy_commands,
-        validate_domain, validate_systemd_unit_name, PttoConfig,
+        blue_green_deploy_commands, build_go_linux_amd64_binary, caddy_init_commands,
+        caddyfile_for_port, ensure_artifact_parent_dir, go_build_command_preview, resolve_domain,
+        resolve_target, resolve_target_for_db, resolve_target_for_telemetry, validate_domain,
+        validate_systemd_unit_name, PttoConfig,
     };
 
     #[test]
@@ -473,31 +438,22 @@ mod tests {
     }
 
     #[test]
-    fn systemd_deploy_contains_install_and_reload_steps() {
-        let commands = systemd_deploy_commands(8080);
-        assert_eq!(commands.len(), 2);
-        assert!(commands[0].contains("install -m 755 /tmp/ptto-app /opt/ptto/bin/ptto-app"));
-        assert!(commands[1].contains("cat > \"$tmp_service\" <<'EOF'"));
-        assert!(commands[1].contains("ExecStart=/opt/ptto/bin/ptto-app"));
-        assert!(commands[1].contains("systemctl daemon-reload"));
-        assert!(commands[1].contains("systemctl enable --now ptto-app"));
-        assert!(commands[1].contains("systemctl restart ptto-app"));
-        assert!(commands[1].contains("Environment=PORT=8080"));
+    fn blue_green_deploy_contains_swap_steps() {
+        let commands = blue_green_deploy_commands("example.com");
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains("install -m 755 /tmp/ptto-app"));
+        assert!(commands[0].contains("pick_port()"));
+        assert!(commands[0].contains("new_port=\"$(pick_port)\""));
+        assert!(commands[0].contains("systemctl reload caddy"));
+        assert!(commands[0].contains("kill -TERM"));
         assert!(commands[0].contains("sudo -n true"));
-        assert!(commands[1].contains("sudo -n true"));
     }
 
     #[test]
-    fn caddy_routing_contains_reverse_proxy_and_reload_steps() {
-        let commands = caddy_routing_commands("example.com", 8080);
-        assert_eq!(commands.len(), 1);
-        assert!(commands[0].contains("printf '%s'"));
-        assert!(commands[0].contains("reverse_proxy 127.0.0.1:8080"));
-        assert!(commands[0].contains("output file /var/log/caddy/ptto-access.log"));
-        assert!(commands[0].contains("caddy validate --config \"$tmp_caddy\""));
-        assert!(commands[0].contains("cp /etc/caddy/Caddyfile"));
-        assert!(commands[0].contains("systemctl reload caddy"));
-        assert!(commands[0].contains("sudo -n true"));
+    fn caddyfile_for_port_renders_reverse_proxy_target() {
+        let caddyfile = caddyfile_for_port("example.com", "__PTTO_PORT__");
+        assert!(caddyfile.contains("reverse_proxy 127.0.0.1:__PTTO_PORT__"));
+        assert!(caddyfile.contains("output file /var/log/caddy/ptto-access.log"));
     }
 
     #[test]
