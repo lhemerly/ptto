@@ -123,9 +123,8 @@ fn init(target: &str, ssh_key: Option<&str>, dry_run: bool) -> Result<()> {
     let ssh = SshClient::new(target, ssh_key, dry_run);
     ssh.run("echo '[ptto] SSH connectivity check succeeded'")?;
 
-    for command in caddy_init_commands() {
-        ssh.run(&command)?;
-    }
+    let commands = caddy_init_commands().join("\n");
+    ssh.run(&commands)?;
 
     println!("[ptto] server init complete (Caddy/goaccess installed and Caddy started)");
     Ok(())
@@ -146,12 +145,10 @@ fn deploy(
     ssh.copy_file(Path::new(artifact), "/tmp/ptto-app")?;
     println!("[ptto] artifact staged over ssh at /tmp/ptto-app");
 
-    for command in systemd_deploy_commands(APP_INTERNAL_PORT) {
-        ssh.run(&command)?;
-    }
-    for command in caddy_routing_commands(domain, APP_INTERNAL_PORT) {
-        ssh.run(&command)?;
-    }
+    let mut deploy_commands = systemd_deploy_commands(APP_INTERNAL_PORT);
+    deploy_commands.extend(caddy_routing_commands(domain, APP_INTERNAL_PORT));
+    let commands = deploy_commands.join("\n");
+    ssh.run(&commands)?;
 
     println!("[ptto] systemd service generated, reloaded, and restarted");
     println!("[ptto] caddy routing generated and reloaded");
