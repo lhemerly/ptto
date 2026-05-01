@@ -4,81 +4,112 @@
 
 > The world doesn't need another distributed PaaS. It needs a potato.
 
-Modern web deployment is a trap. We've traded the simplicity of a Linux server for the cognitive overload of distributed YAML files, three different cloud dashboards, and the constant anxiety of usage-based billing.
+`ptto` is a highly opinionated, zero-dashboard CLI for deploying single-binary web apps to one VPS.
 
-`ptto` is a highly opinionated, zero-dashboard CLI tool for deploying web applications to a single VPS (a "potato").
+No Kubernetes. No Docker Compose sprawl. No cloud control panel.
 
-No Kubernetes. No Docker-compose hell. No cloud provider lock-in. No Vercel.
+## Current capabilities (MVP)
 
-## The MVP Stack (Patient Zero)
+Today, `ptto` focuses on a Go single-binary workflow:
 
-Right now, `ptto` only deploys the most brutally efficient, indestructible stack known to web development: **The Single Binary.**
+- Build target: `GOOS=linux GOARCH=amd64`
+- Runtime/service manager: `systemd`
+- Edge proxy + TLS: `Caddy` (Let's Encrypt)
+- Persistence: remote SQLite file at `/opt/ptto/data/database.sqlite`
+- Ops UX: SSH-native logs, process dashboard, and access-log traffic analytics
 
-* **Language**: Go
+## Installation
 
-* **Frontend**: HTMX (Server-Side HTML Rendering)
-
-* **Database**: Embedded SQLite
-
-* **Auth**: Native Passkeys (WebAuthn)
-
-* **Proxy/SSL**: Caddy
-
-If you want microservices or a thick React SPA client, go pay AWS. If you want a stateful, high-performance app deployed in 3 seconds, use `ptto`.
-
-## How it works
-
-1. You buy a \$5 VPS (Ubuntu/Debian).
-
-2. You initialize the project locally.
-
-```
-# Start a new project with Passkeys, SQLite, and HTMX pre-configured
-ptto new my-app
-cd my-app
-
-# Connect it to your VPS
-ptto init
-
+```bash
+cargo install --path .
 ```
 
-This creates a tiny `.ptto.toml` file in your directory. No complex YAML.
+Or run without installing:
 
+```bash
+cargo run -- <COMMAND>
 ```
+
+## Quick start
+
+1. Create a `.ptto.toml` in your app directory:
+
+```toml
 host = "root@203.0.113.10"
 domain = "your-app.com"
-
+# optional
+ssh_key = "~/.ssh/id_ed25519"
 ```
 
-3. You deploy.
+2. Prepare the VPS once:
 
+```bash
+ptto init
+# or: ptto init root@203.0.113.10
 ```
+
+3. Deploy:
+
+```bash
 ptto deploy
-
+# or explicitly:
+# ptto deploy --domain your-app.com --target root@203.0.113.10
 ```
 
-### What `ptto` actually does during `deploy`:
+## Commands
 
-1. **Compiles**: Cross-compiles your Go web app locally (`GOOS=linux GOARCH=amd64 go build`).
+### Deploy lifecycle
 
-2. **Transfers**: `scp`s the single binary to the server using your local OS credentials.
+- `ptto init [target] [--dry-run]`
+  - Installs/validates Caddy + goaccess and enables Caddy on the target host.
+- `ptto deploy [--domain <domain>] [--target <user@host>] [--artifact <path>] [--source <path>] [--dry-run]`
+  - Builds your Go app for Linux amd64.
+  - Copies artifact to remote host over SSH/SCP.
+  - Writes/updates `ptto-app` systemd service.
+  - Writes Caddy routing config and reloads services.
 
-3. **Injects**: Sets up a persistent SQLite directory and injects `DATABASE_URL` via systemd environment variables.
+### Operations
 
-4. **Secures**: Generates a Caddyfile and automatically provisions Let's Encrypt SSL.
+- `ptto logs [service] [--target <user@host>]`
+  - Streams `journalctl` logs (default service: `ptto-app`).
+- `ptto top [--target <user@host>]`
+  - Opens `htop`, `btop`, or `top` on the remote host.
+- `ptto traffic [--target <user@host>]`
+  - Streams Caddy access logs into `goaccess` in your terminal.
 
-5. **Restarts**: Reloads the `systemd` service. Your new code is live.
+### Database
 
-## Management (The Terminal Dashboard)
+- `ptto db shell [--target <user@host>]`
+- `ptto db pull [local_path] [--target <user@host>]`
+- `ptto db push [local_path] [--target <user@host>]`
 
-`ptto` refuses to build web dashboards. Instead, it uses its encrypted SSH bridge to pipe your server's native telemetry and data directly to your local terminal.
+### Utility
 
-* `ptto logs` - Streams `systemd-journald` logs live to your terminal.
+- `ptto generate-key`
+  - Placeholder hook for future CI/CD deploy-key workflows.
 
-* `ptto db shell` - Drops you into a remote `sqlite3` interactive prompt for your production database.
+## Behavior notes
 
-* `ptto db pull` / `ptto db push` - Safely syncs the `database.sqlite` file to your local machine for GUI editing.
+- `host`, `domain`, and optional `ssh_key` are read from `.ptto.toml` when command flags are omitted.
+- Domain validation rejects whitespace/control characters.
+- `--dry-run` shows planned build/remote actions without executing remote mutations.
 
-* `ptto top` - Streams server CPU/RAM usage (`htop` / `bottom`).
+## Examples
 
-* `ptto traffic` - Pipes Caddy access logs into a real-time terminal analytics dashboard (`goaccess`).
+```bash
+# bootstrap with explicit target
+ptto init root@203.0.113.10 --dry-run
+
+# deploy using config defaults
+ptto deploy --dry-run
+
+# tail custom service logs
+ptto logs my-app --target root@203.0.113.10
+
+# pull production sqlite db
+ptto db pull ./prod.sqlite --target root@203.0.113.10
+```
+
+## Disclaimer
+
+`ptto` is intentionally opinionated and currently optimized for Ubuntu/Debian-like targets with `apt-get`.
