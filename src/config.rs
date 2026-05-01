@@ -30,17 +30,46 @@ impl PttoConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::PttoConfig;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    use super::{PttoConfig, CONFIG_FILENAME};
+
+    fn cwd_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct CwdGuard {
+        original_dir: PathBuf,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl CwdGuard {
+        fn enter(path: &std::path::Path) -> Self {
+            let lock = cwd_lock().lock().expect("cwd lock should not be poisoned");
+            let original_dir = std::env::current_dir().expect("cwd");
+            std::env::set_current_dir(path).expect("switch cwd");
+            Self {
+                original_dir,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for CwdGuard {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original_dir).expect("restore cwd");
+        }
+    }
 
     #[test]
     fn load_returns_defaults_when_file_missing() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let original_dir = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(temp_dir.path()).expect("switch cwd");
+        let _cwd_guard = CwdGuard::enter(temp_dir.path());
 
         let config = PttoConfig::load().expect("load should succeed");
 
-        std::env::set_current_dir(original_dir).expect("restore cwd");
         assert!(config.host.is_none());
         assert!(config.domain.is_none());
         assert!(config.ssh_key.is_none());
@@ -49,17 +78,15 @@ mod tests {
     #[test]
     fn load_parses_values_from_ptto_toml() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let original_dir = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(temp_dir.path()).expect("switch cwd");
+        let _cwd_guard = CwdGuard::enter(temp_dir.path());
         std::fs::write(
-            ".ptto.toml",
+            CONFIG_FILENAME,
             "host = \"root@host\"\ndomain = \"example.com\"\nssh_key = \"~/.ssh/id_ed25519\"\n",
         )
         .expect("write config");
 
         let config = PttoConfig::load().expect("load should parse");
 
-        std::env::set_current_dir(original_dir).expect("restore cwd");
         assert_eq!(config.host.as_deref(), Some("root@host"));
         assert_eq!(config.domain.as_deref(), Some("example.com"));
         assert_eq!(config.ssh_key.as_deref(), Some("~/.ssh/id_ed25519"));
@@ -68,13 +95,11 @@ mod tests {
     #[test]
     fn load_surfaces_parse_errors_with_context() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let original_dir = std::env::current_dir().expect("cwd");
-        std::env::set_current_dir(temp_dir.path()).expect("switch cwd");
-        std::fs::write(".ptto.toml", "not = { valid = toml").expect("write config");
+        let _cwd_guard = CwdGuard::enter(temp_dir.path());
+        std::fs::write(CONFIG_FILENAME, "not = { valid = toml").expect("write config");
 
         let err = PttoConfig::load().expect_err("invalid toml should fail");
 
-        std::env::set_current_dir(original_dir).expect("restore cwd");
         assert!(err.to_string().contains("failed to parse .ptto.toml"));
     }
 }
