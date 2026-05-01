@@ -394,8 +394,8 @@ mod tests {
 
     use super::{
         build_go_linux_amd64_binary, caddy_init_commands, caddy_routing_commands,
-        ensure_artifact_parent_dir, go_build_command_preview, systemd_deploy_commands,
-        validate_domain,
+        ensure_artifact_parent_dir, go_build_command_preview, resolve_domain, resolve_target,
+        resolve_target_for_db, systemd_deploy_commands, validate_domain, PttoConfig,
     };
 
     #[test]
@@ -472,5 +472,57 @@ mod tests {
         )
         .expect("parent directory should be created");
         assert!(temp_dir.path().join("dist").exists());
+    }
+
+    #[test]
+    fn resolve_helpers_prefer_cli_values_over_config() {
+        let config = PttoConfig {
+            host: Some("root@from-config".to_string()),
+            domain: Some("from-config.example.com".to_string()),
+            ssh_key: None,
+        };
+
+        let target = resolve_target(Some("root@from-cli".to_string()), &config)
+            .expect("target should resolve from cli");
+        let db_target = resolve_target_for_db(Some("root@db-cli".to_string()), &config)
+            .expect("db target should resolve from cli");
+        let domain =
+            resolve_domain(Some("from-cli.example.com".to_string()), &config).expect("domain");
+
+        assert_eq!(target, "root@from-cli");
+        assert_eq!(db_target, "root@db-cli");
+        assert_eq!(domain, "from-cli.example.com");
+    }
+
+    #[test]
+    fn resolve_helpers_fall_back_to_config_values() {
+        let config = PttoConfig {
+            host: Some("root@config-host".to_string()),
+            domain: Some("config.example.com".to_string()),
+            ssh_key: None,
+        };
+
+        let target = resolve_target(None, &config).expect("target should come from config");
+        let db_target =
+            resolve_target_for_db(None, &config).expect("db target should come from config");
+        let domain = resolve_domain(None, &config).expect("domain should come from config");
+
+        assert_eq!(target, "root@config-host");
+        assert_eq!(db_target, "root@config-host");
+        assert_eq!(domain, "config.example.com");
+    }
+
+    #[test]
+    fn resolve_helpers_return_actionable_errors_when_missing() {
+        let config = PttoConfig::default();
+
+        let target_error = resolve_target(None, &config).expect_err("target should be required");
+        let db_error =
+            resolve_target_for_db(None, &config).expect_err("db target should be required");
+        let domain_error = resolve_domain(None, &config).expect_err("domain should be required");
+
+        assert!(target_error.to_string().contains("missing SSH target"));
+        assert!(db_error.to_string().contains("pass --target to ptto db"));
+        assert!(domain_error.to_string().contains("missing domain"));
     }
 }
