@@ -91,17 +91,28 @@ ssh_key = "~/.ssh/custom_key"
 }
 
 #[test]
-fn logs_does_not_require_or_parse_ptto_toml() {
+fn logs_requires_target_when_not_in_config() {
     let dir = tempdir().expect("tempdir");
-    std::fs::write(dir.path().join(".ptto.toml"), "this is not valid toml")
-        .expect("config should write");
 
     let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
     cmd.current_dir(dir.path())
         .args(["logs"])
         .assert()
-        .success()
-        .stdout(contains("log streaming planned for service ptto-app"));
+        .failure()
+        .stderr(contains("missing SSH target"))
+        .stderr(contains("pass --target"));
+}
+
+#[test]
+fn top_requires_target_when_not_in_config() {
+    let dir = tempdir().expect("tempdir");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["top"])
+        .assert()
+        .failure()
+        .stderr(contains("missing SSH target"));
 }
 
 #[test]

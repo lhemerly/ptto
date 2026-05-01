@@ -44,6 +44,21 @@ pub enum Command {
         /// Name of the service to stream
         #[arg(default_value = "ptto-app")]
         service: String,
+        /// SSH target in user@host format
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Stream remote process usage dashboard
+    Top {
+        /// SSH target in user@host format
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Stream Caddy access telemetry via goaccess
+    Traffic {
+        /// SSH target in user@host format
+        #[arg(long)]
+        target: Option<String>,
     },
     /// Manage remote SQLite database
     Db {
