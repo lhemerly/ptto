@@ -63,7 +63,10 @@ jobs:
       - name: Build tests with dead-code linking for better coverage
         env:
           RUSTFLAGS: -C link-dead-code
-        run: cargo test --locked --all-targets --all-features --no-run
+        run: |
+          cargo test --locked --all-targets --all-features --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true and .executable != null) | .executable' \
+            > target/test-binaries.txt
 
       - name: Build kcov from master
         run: |
@@ -79,15 +82,15 @@ jobs:
       - name: Generate coverage reports with kcov
         run: |
           mkdir -p target/cov
-          find target/debug/deps -maxdepth 1 -type f -executable -name 'ptto-*' | while read -r file; do
+          while read -r file; do
+            [ -x "$file" ] || continue
             out_dir="target/cov/$(basename "$file")"
             mkdir -p "$out_dir"
             ./kcov-build/usr/local/bin/kcov \
               --exclude-pattern=/.cargo,/usr/lib \
-              --verify \
               "$out_dir" \
               "$file"
-          done
+          done < target/test-binaries.txt
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
