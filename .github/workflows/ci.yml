@@ -48,15 +48,50 @@ jobs:
       - name: Cache cargo registry + build
         uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install kcov build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libcurl4-openssl-dev \
+            libelf-dev \
+            libdw-dev \
+            cmake \
+            gcc \
+            binutils-dev \
+            libiberty-dev
 
-      - name: Generate code coverage
-        run: cargo llvm-cov --locked --all-features --workspace --lcov --output-path lcov.info
+      - name: Build tests with dead-code linking for better coverage
+        env:
+          RUSTFLAGS: -C link-dead-code
+        run: cargo test --locked --all-targets --all-features --no-run
+
+      - name: Build kcov from master
+        run: |
+          wget https://github.com/SimonKagstrom/kcov/archive/master.tar.gz
+          tar xzf master.tar.gz
+          cd kcov-master
+          mkdir build
+          cd build
+          cmake ..
+          make
+          make install DESTDIR=../../kcov-build
+
+      - name: Generate coverage reports with kcov
+        run: |
+          mkdir -p target/cov
+          find target/debug/deps -maxdepth 1 -type f -executable -name 'ptto-*' | while read -r file; do
+            out_dir="target/cov/$(basename "$file")"
+            mkdir -p "$out_dir"
+            ./kcov-build/usr/local/bin/kcov \
+              --exclude-pattern=/.cargo,/usr/lib \
+              --verify \
+              "$out_dir" \
+              "$file"
+          done
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
+          directory: target/cov
           fail_ci_if_error: true
