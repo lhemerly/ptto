@@ -116,6 +116,23 @@ fn deploy_rejects_invalid_domain_input() {
 }
 
 #[test]
+fn deploy_rejects_tab_whitespace_in_domain() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.args([
+        "deploy",
+        "--domain",
+        "example\t.com",
+        "--target",
+        "root@127.0.0.1",
+        "--dry-run",
+    ])
+    .assert()
+    .failure()
+    .stderr(contains("invalid domain"))
+    .stderr(contains("whitespace/control characters"));
+}
+
+#[test]
 fn db_pull_requires_target_when_not_in_config() {
     let dir = tempdir().expect("tempdir");
 
