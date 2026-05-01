@@ -447,6 +447,56 @@ mod tests {
     }
 
     #[test]
+    fn domain_validation_accepts_wildcard_only_in_leftmost_label() {
+        validate_domain("*.example.com").expect("leftmost wildcard should be valid");
+
+        let err = validate_domain("api.*.example.com")
+            .expect_err("wildcard outside leftmost label should be rejected");
+        assert!(err
+            .to_string()
+            .contains("labels may only contain ASCII letters, digits, and hyphens"));
+    }
+
+    #[test]
+    fn domain_validation_rejects_non_ascii_domains() {
+        let err = validate_domain("tést.example.com").expect_err("unicode should be rejected");
+        assert!(err
+            .to_string()
+            .contains("only ASCII DNS-style domains are currently supported"));
+    }
+
+    #[test]
+    fn domain_validation_enforces_length_constraints() {
+        let empty = validate_domain("").expect_err("empty should be rejected");
+        assert!(empty.to_string().contains("must be 1-253 characters"));
+
+        let too_long_domain = format!("{}.com", "a".repeat(250));
+        let too_long = validate_domain(&too_long_domain).expect_err("too long should be rejected");
+        assert!(too_long.to_string().contains("must be 1-253 characters"));
+
+        let label_too_long = format!("{}.com", "a".repeat(64));
+        let label_error =
+            validate_domain(&label_too_long).expect_err("label longer than 63 should fail");
+        assert!(label_error
+            .to_string()
+            .contains("labels must be 1-63 characters"));
+    }
+
+    #[test]
+    fn domain_validation_rejects_labels_with_edge_hyphens() {
+        let leading = validate_domain("-api.example.com")
+            .expect_err("leading hyphen in label should be rejected");
+        assert!(leading
+            .to_string()
+            .contains("labels cannot start or end with hyphens"));
+
+        let trailing = validate_domain("api-.example.com")
+            .expect_err("trailing hyphen in label should be rejected");
+        assert!(trailing
+            .to_string()
+            .contains("labels cannot start or end with hyphens"));
+    }
+    #[test]
     fn go_build_wrapper_is_dry_run_safe() {
         let result = build_go_linux_amd64_binary("./cmd/server", "./app", true);
         assert!(result.is_ok());
