@@ -22,7 +22,7 @@ Phase 2: The Terminal Dashboard (Local DX)
 
 We have deployment. Now we need visibility without web-bloat.
 
-[ ] Config Parser: Implement parsing for the .ptto.toml local file to remove the need for CLI flags on every run.
+[x] Config Parser: Implement parsing for the .ptto.toml local file to remove the need for CLI flags on every run.
 
 [ ] DB Management Suite: Implement ptto db shell, ptto db pull, and ptto db push using native SSH wrappers.
 
