@@ -1,5 +1,7 @@
 # 🥔 ptto (The "Just Deploy" Manifesto)
 
+[![codecov](https://codecov.io/gh/ptto/ptto/branch/main/graph/badge.svg)](https://codecov.io/gh/ptto/ptto)
+
 > The world doesn't need another distributed PaaS. It needs a potato.
 
 Modern web deployment is a trap. We've traded the simplicity of a Linux server for the cognitive overload of distributed YAML files, three different cloud dashboards, and the constant anxiety of usage-based billing.
