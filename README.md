@@ -13,7 +13,7 @@ No Kubernetes. No Docker Compose sprawl. No cloud control panel.
 Today, `ptto` focuses on a Go single-binary workflow:
 
 - Build target: `GOOS=linux GOARCH=amd64`
-- Runtime/service manager: `systemd`
+- Runtime strategy: native blue-green process swap managed over SSH
 - Edge proxy + TLS: `Caddy` (Let's Encrypt)
 - Persistence: remote SQLite file at `/opt/ptto/data/database.sqlite`
 - Ops UX: SSH-native logs, process dashboard, and access-log traffic analytics
@@ -65,8 +65,8 @@ ptto deploy
 - `ptto deploy [--domain <domain>] [--target <user@host>] [--artifact <path>] [--source <path>] [--dry-run]`
   - Builds your Go app for Linux amd64.
   - Copies artifact to remote host over SSH/SCP.
-  - Writes/updates `ptto-app` systemd service.
-  - Writes Caddy routing config and reloads services.
+  - Uploads a new release binary and launches it on a random open localhost port.
+  - Swaps Caddy upstream to the new port and gracefully terminates the previous process.
 
 ### Operations
 

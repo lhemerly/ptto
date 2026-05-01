@@ -34,7 +34,7 @@ Making the potato indestructible.
 
 [ ] Automated Backups: CLI configures a systemd timer on the server to sync the SQLite WAL/file to an S3/R2 bucket (e.g., via Litestream or rclone).
 
-[ ] Zero-Downtime Deploys: Implement a blue-green swap on the server. Spin up the new binary on a random open port, update Caddy, gracefully kill the old process.
+[x] Zero-Downtime Deploys: Implement a blue-green swap on the server. Spin up the new binary on a random open port, update Caddy, gracefully kill the old process.
 
 [ ] CI/CD Hook: Create the ptto generate-key workflow and official GitHub Action for headless deployments.
 
