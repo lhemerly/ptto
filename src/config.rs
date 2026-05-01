@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::io::ErrorKind;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -15,13 +15,13 @@ pub struct PttoConfig {
 
 impl PttoConfig {
     pub fn load() -> Result<Self> {
-        let path = Path::new(CONFIG_FILENAME);
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", CONFIG_FILENAME))?;
+        let raw = match fs::read_to_string(CONFIG_FILENAME) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Self::default()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to read {}", CONFIG_FILENAME));
+            }
+        };
         let config: PttoConfig =
             toml::from_str(&raw).with_context(|| format!("failed to parse {}", CONFIG_FILENAME))?;
         Ok(config)

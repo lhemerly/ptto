@@ -58,3 +58,31 @@ ssh_key = "~/.ssh/custom_key"
             "scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i ~/.ssh/custom_key",
         ));
 }
+
+#[test]
+fn logs_does_not_require_or_parse_ptto_toml() {
+    let dir = tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(".ptto.toml"), "this is not valid toml")
+        .expect("config should write");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["logs"])
+        .assert()
+        .success()
+        .stdout(contains("log streaming planned for service ptto-app"));
+}
+
+#[test]
+fn generate_key_does_not_require_or_parse_ptto_toml() {
+    let dir = tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(".ptto.toml"), "not valid = { toml")
+        .expect("config should write");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["generate-key"])
+        .assert()
+        .success()
+        .stdout(contains("key generation hook planned for CI/CD"));
+}

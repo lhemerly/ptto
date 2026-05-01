@@ -74,6 +74,7 @@ fn build_ssh_args(target: &str, ssh_key: Option<&str>, remote_command: &str) -> 
         args.push("-i".to_string());
         args.push(key.to_string());
     }
+    args.push("--".to_string());
     args.push(target.to_string());
     args.push(remote_command.to_string());
     args
@@ -122,6 +123,7 @@ mod tests {
                 "BatchMode=yes",
                 "-o",
                 "StrictHostKeyChecking=accept-new",
+                "--",
                 "root@example.com",
                 "echo ok"
             ]
@@ -150,5 +152,6 @@ mod tests {
     fn ssh_args_include_optional_identity_key() {
         let args = build_ssh_args("root@example.com", Some("~/.ssh/key"), "echo ok");
         assert!(args.windows(2).any(|w| w == ["-i", "~/.ssh/key"]));
+        assert!(args.contains(&"--".to_string()));
     }
 }

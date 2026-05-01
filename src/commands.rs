@@ -13,10 +13,9 @@ use crate::{
 const APP_INTERNAL_PORT: u16 = 8080;
 
 pub fn dispatch(cli: Cli) -> Result<()> {
-    let config = PttoConfig::load()?;
-
     match cli.command {
         Command::Init { target, dry_run } => {
+            let config = PttoConfig::load()?;
             let target = resolve_target(target, &config)?;
             init(&target, config.ssh_key.as_deref(), dry_run)
         }
@@ -27,6 +26,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             source,
             dry_run,
         } => {
+            let config = PttoConfig::load()?;
             let domain = resolve_domain(domain, &config)?;
             let target = resolve_target(target, &config)?;
             deploy(
