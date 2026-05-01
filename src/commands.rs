@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::{
     cli::{Cli, Command},
+    config::PttoConfig,
     ssh::SshClient,
 };
 
@@ -13,22 +14,38 @@ const APP_INTERNAL_PORT: u16 = 8080;
 
 pub fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Init { target, dry_run } => init(&target, dry_run),
+        Command::Init { target, dry_run } => {
+            let config = PttoConfig::load()?;
+            let target = resolve_target(target, &config)?;
+            init(&target, config.ssh_key.as_deref(), dry_run)
+        }
         Command::Deploy {
             domain,
             target,
             artifact,
             source,
             dry_run,
-        } => deploy(&domain, &target, &artifact, &source, dry_run),
+        } => {
+            let config = PttoConfig::load()?;
+            let domain = resolve_domain(domain, &config)?;
+            let target = resolve_target(target, &config)?;
+            deploy(
+                &domain,
+                &target,
+                config.ssh_key.as_deref(),
+                &artifact,
+                &source,
+                dry_run,
+            )
+        }
         Command::Logs { service } => logs(&service),
         Command::GenerateKey => generate_key(),
     }
 }
 
-fn init(target: &str, dry_run: bool) -> Result<()> {
+fn init(target: &str, ssh_key: Option<&str>, dry_run: bool) -> Result<()> {
     println!("[ptto] bootstrap starting for {target}");
-    let ssh = SshClient::new(target, dry_run);
+    let ssh = SshClient::new(target, ssh_key, dry_run);
     ssh.run("echo '[ptto] SSH connectivity check succeeded'")?;
 
     for command in caddy_init_commands() {
@@ -39,11 +56,18 @@ fn init(target: &str, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn deploy(domain: &str, target: &str, artifact: &str, source: &str, dry_run: bool) -> Result<()> {
+fn deploy(
+    domain: &str,
+    target: &str,
+    ssh_key: Option<&str>,
+    artifact: &str,
+    source: &str,
+    dry_run: bool,
+) -> Result<()> {
     validate_domain(domain)?;
     println!("[ptto] deploy pipeline planned for domain {domain}");
     build_go_linux_amd64_binary(source, artifact, dry_run)?;
-    let ssh = SshClient::new(target, dry_run);
+    let ssh = SshClient::new(target, ssh_key, dry_run);
     ssh.copy_file(Path::new(artifact), "/tmp/ptto-app")?;
     println!("[ptto] artifact staged over ssh at /tmp/ptto-app");
 
@@ -57,6 +81,18 @@ fn deploy(domain: &str, target: &str, artifact: &str, source: &str, dry_run: boo
     println!("[ptto] systemd service generated, reloaded, and restarted");
     println!("[ptto] caddy routing generated and reloaded");
     Ok(())
+}
+
+fn resolve_target(cli_target: Option<String>, config: &PttoConfig) -> Result<String> {
+    cli_target
+        .or_else(|| config.host.clone())
+        .context("missing SSH target: pass --target (deploy) or positional target (init), or set host in .ptto.toml")
+}
+
+fn resolve_domain(cli_domain: Option<String>, config: &PttoConfig) -> Result<String> {
+    cli_domain
+        .or_else(|| config.domain.clone())
+        .context("missing domain: pass --domain or set domain in .ptto.toml")
 }
 
 fn logs(service: &str) -> Result<()> {

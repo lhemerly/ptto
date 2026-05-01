@@ -16,7 +16,7 @@ pub enum Command {
     /// Prepare a target VPS (Caddy/systemd prerequisites)
     Init {
         /// SSH target in user@host format
-        target: String,
+        target: Option<String>,
         /// Print remote commands instead of executing them
         #[arg(long, default_value_t = false)]
         dry_run: bool,
@@ -25,10 +25,10 @@ pub enum Command {
     Deploy {
         /// Public domain that should route to this deployment
         #[arg(long)]
-        domain: String,
+        domain: Option<String>,
         /// SSH target in user@host format
         #[arg(long)]
-        target: String,
+        target: Option<String>,
         /// Output path for the compiled Linux amd64 binary
         #[arg(long, default_value = "./app")]
         artifact: String,
