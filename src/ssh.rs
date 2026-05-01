@@ -304,4 +304,42 @@ mod tests {
             .to_string()
             .contains("remote path contains unsupported characters"));
     }
+
+    #[test]
+    fn scp_push_args_reject_empty_remote_path() {
+        let error = build_scp_args("deployer@example.com", None, Path::new("./app"), "")
+            .expect_err("empty path should be rejected");
+        assert!(error.to_string().contains("remote path cannot be empty"));
+    }
+
+    #[test]
+    fn scp_pull_args_include_optional_identity_key() {
+        let args = build_scp_from_remote_args(
+            "deployer@example.com",
+            Some("~/.ssh/deploy"),
+            "/tmp/app",
+            Path::new("./app"),
+        )
+        .expect("valid args");
+        assert!(args.windows(2).any(|w| w == ["-i", "~/.ssh/deploy"]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scp_push_args_reject_non_utf8_local_path() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid_path = Path::new(OsStr::from_bytes(b"bad-\xFF"));
+        let error = build_scp_args(
+            "deployer@example.com",
+            None,
+            invalid_path,
+            "/tmp/destination",
+        )
+        .expect_err("non-utf8 paths should be rejected");
+        assert!(error
+            .to_string()
+            .contains("local file path contains unsupported UTF-8"));
+    }
 }
