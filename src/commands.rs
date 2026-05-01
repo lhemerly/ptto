@@ -521,8 +521,15 @@ mod tests {
             resolve_target_for_db(None, &config).expect_err("db target should be required");
         let domain_error = resolve_domain(None, &config).expect_err("domain should be required");
 
-        assert!(target_error.to_string().contains("missing SSH target"));
+        let target_error_text = target_error.to_string();
+        let domain_error_text = domain_error.to_string();
+
+        assert!(target_error_text.contains("missing SSH target"));
+        assert!(target_error_text.contains("--target"));
+        assert!(target_error_text.contains(".ptto.toml"));
         assert!(db_error.to_string().contains("pass --target to ptto db"));
-        assert!(domain_error.to_string().contains("missing domain"));
+        assert!(domain_error_text.contains("missing domain"));
+        assert!(domain_error_text.contains("--domain"));
+        assert!(domain_error_text.contains(".ptto.toml"));
     }
 }
