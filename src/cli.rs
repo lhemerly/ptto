@@ -47,6 +47,9 @@ pub enum Command {
     },
     /// Manage remote SQLite database
     Db {
+        /// SSH target in user@host format
+        #[arg(long)]
+        target: Option<String>,
         #[command(subcommand)]
         command: DbCommand,
     },
