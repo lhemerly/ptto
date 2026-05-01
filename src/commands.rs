@@ -446,7 +446,6 @@ mod tests {
             .contains("whitespace/control characters are not allowed"));
     }
 
-
     #[test]
     fn domain_validation_accepts_wildcard_only_in_leftmost_label() {
         validate_domain("*.example.com").expect("leftmost wildcard should be valid");
@@ -469,15 +468,11 @@ mod tests {
     #[test]
     fn domain_validation_enforces_length_constraints() {
         let empty = validate_domain("").expect_err("empty should be rejected");
-        assert!(empty
-            .to_string()
-            .contains("must be 1-253 characters"));
+        assert!(empty.to_string().contains("must be 1-253 characters"));
 
         let too_long_domain = format!("{}.com", "a".repeat(250));
         let too_long = validate_domain(&too_long_domain).expect_err("too long should be rejected");
-        assert!(too_long
-            .to_string()
-            .contains("must be 1-253 characters"));
+        assert!(too_long.to_string().contains("must be 1-253 characters"));
 
         let label_too_long = format!("{}.com", "a".repeat(64));
         let label_error =
