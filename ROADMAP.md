@@ -26,7 +26,7 @@ We have deployment. Now we need visibility without web-bloat.
 
 [x] DB Management Suite: Implement ptto db shell, ptto db pull, and ptto db push using native SSH wrappers.
 
-[ ] Telemetry Wrappers: Implement ptto logs, ptto top, and ptto traffic (automating goaccess installation via init).
+[x] Telemetry Wrappers: Implement ptto logs, ptto top, and ptto traffic (automating goaccess installation via init).
 
 Phase 3: Resilience & Automation
 
