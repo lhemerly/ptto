@@ -1,6 +1,6 @@
 # 🥔 ptto (The "Just Deploy" Manifesto)
 
-[![codecov](https://codecov.io/gh/ptto/ptto/branch/main/graph/badge.svg)](https://codecov.io/gh/ptto/ptto)
+[![codecov](https://codecov.io/github/lhemerly/ptto/graph/badge.svg?token=O6W62RLDY4)](https://codecov.io/github/lhemerly/ptto)
 
 > The world doesn't need another distributed PaaS. It needs a potato.
 
