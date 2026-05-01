@@ -97,3 +97,50 @@ fn db_help_lists_management_commands() {
         .stdout(contains("pull"))
         .stdout(contains("push"));
 }
+
+#[test]
+fn deploy_rejects_invalid_domain_input() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.args([
+        "deploy",
+        "--domain",
+        "example.com\nbad",
+        "--target",
+        "root@127.0.0.1",
+        "--dry-run",
+    ])
+    .assert()
+    .failure()
+    .stderr(contains("invalid domain"))
+    .stderr(contains("whitespace/control characters"));
+}
+
+#[test]
+fn deploy_rejects_tab_whitespace_in_domain() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.args([
+        "deploy",
+        "--domain",
+        "example\t.com",
+        "--target",
+        "root@127.0.0.1",
+        "--dry-run",
+    ])
+    .assert()
+    .failure()
+    .stderr(contains("invalid domain"))
+    .stderr(contains("whitespace/control characters"));
+}
+
+#[test]
+fn db_pull_requires_target_when_not_in_config() {
+    let dir = tempdir().expect("tempdir");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["db", "pull"])
+        .assert()
+        .failure()
+        .stderr(contains("missing SSH target"))
+        .stderr(contains("pass --target to ptto db"));
+}
