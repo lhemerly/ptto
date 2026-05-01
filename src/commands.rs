@@ -103,12 +103,27 @@ fn db(command: DbCommand, ssh: &SshClient) -> Result<()> {
                     "set -eu; ",
                     "{}",
                     "$SUDO install -d -m 755 /opt/ptto/data; ",
-                    "$SUDO systemctl stop ptto-app; ",
-                    "trap '$SUDO systemctl start ptto-app' EXIT; ",
+                    "restart_mode=\"none\"; ",
+                    "if $SUDO test -f /opt/ptto/run/ptto-app.pid; then ",
+                    "db_old_pid=\"$($SUDO cat /opt/ptto/run/ptto-app.pid)\"; ",
+                    "if [ -n \"$db_old_pid\" ] && $SUDO kill -0 \"$db_old_pid\" >/dev/null 2>&1; then ",
+                    "restart_mode=\"pid\"; $SUDO kill -TERM \"$db_old_pid\" || true; ",
+                    "for _ in $(seq 1 20); do if ! $SUDO kill -0 \"$db_old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; ",
+                    "if $SUDO kill -0 \"$db_old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$db_old_pid\" || true; fi; ",
+                    "fi; ",
+                    "elif $SUDO systemctl list-unit-files ptto-app.service >/dev/null 2>&1; then ",
+                    "restart_mode=\"systemd\"; $SUDO systemctl stop ptto-app; ",
+                    "fi; ",
                     "tmp_db=\"/opt/ptto/data/.database.sqlite.ptto-tmp-$$\"; ",
                     "$SUDO install -m 640 /tmp/ptto-database.sqlite \"$tmp_db\"; ",
                     "$SUDO mv -f \"$tmp_db\" {}; ",
-                    "$SUDO rm -f /tmp/ptto-database.sqlite"
+                    "$SUDO rm -f /tmp/ptto-database.sqlite; ",
+                    "if [ \"$restart_mode\" = \"pid\" ]; then ",
+                    "if $SUDO test -f /opt/ptto/bin/ptto-app && $SUDO test -f /opt/ptto/run/ptto-app.port; then ",
+                    "db_port=\"$($SUDO cat /opt/ptto/run/ptto-app.port)\"; ",
+                    "$SUDO sh -c \"PORT=$db_port nohup /opt/ptto/bin/ptto-app >/var/log/ptto-app.log 2>&1 & echo \\$! > /opt/ptto/run/ptto-app.pid\"; ",
+                    "fi; ",
+                    "elif [ \"$restart_mode\" = \"systemd\" ]; then $SUDO systemctl start ptto-app; fi"
                 ),
                 sudo_prefix("db push"),
                 shell_quote(REMOTE_DB_PATH)
@@ -337,7 +352,7 @@ fn blue_green_deploy_commands(domain: &str) -> Vec<String> {
             "$SUDO caddy validate --config \"$tmp_caddy\"; ",
             "backup_dir=\"/etc/caddy/backups\"; if [ -f /etc/caddy/Caddyfile ]; then $SUDO install -d -m 755 \"$backup_dir\"; $SUDO cp /etc/caddy/Caddyfile \"$backup_dir/Caddyfile.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
             "$SUDO mv \"$tmp_caddy\" /etc/caddy/Caddyfile; $SUDO chmod 644 /etc/caddy/Caddyfile; $SUDO systemctl reload caddy; ",
-            "if $SUDO test -f /opt/ptto/run/ptto-app.pid; then old_pid=\"$($SUDO cat /opt/ptto/run/ptto-app.pid)\"; if [ -n \"$old_pid\" ] && kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -TERM \"$old_pid\" || true; for _ in $(seq 1 20); do if ! kill -0 \"$old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; if kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$old_pid\" || true; fi; fi; fi; ",
+            "if $SUDO test -f /opt/ptto/run/ptto-app.pid; then old_pid=\"$($SUDO cat /opt/ptto/run/ptto-app.pid)\"; if [ -n \"$old_pid\" ] && $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -TERM \"$old_pid\" || true; for _ in $(seq 1 20); do if ! $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; if $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$old_pid\" || true; fi; fi; fi; ",
             "$SUDO mv \"$new_pid_file\" /opt/ptto/run/ptto-app.pid; $SUDO sh -c \"echo '$new_port' > /opt/ptto/run/ptto-app.port\"; ",
             "$SUDO ln -sfn \"$new_bin\" /opt/ptto/bin/ptto-app; $SUDO systemctl status caddy --no-pager --lines=0"
         ),
@@ -445,6 +460,7 @@ mod tests {
         assert!(commands[0].contains("pick_port()"));
         assert!(commands[0].contains("new_port=\"$(pick_port)\""));
         assert!(commands[0].contains("systemctl reload caddy"));
+        assert!(commands[0].contains("$SUDO kill -0"));
         assert!(commands[0].contains("kill -TERM"));
         assert!(commands[0].contains("sudo -n true"));
     }
