@@ -12,12 +12,43 @@ fn help_shows_manifesto_language() {
 }
 
 #[test]
+fn version_flag_is_supported_from_main_entrypoint() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.arg("--version")
+        .assert()
+        .success()
+        .stdout(contains("ptto"));
+}
+
+#[test]
+fn running_without_subcommand_returns_parse_error() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.assert()
+        .failure()
+        .stderr(contains("Usage:"))
+        .stderr(contains("<COMMAND>"));
+}
+
+#[test]
 fn init_command_accepts_target() {
     let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
     cmd.args(["init", "root@127.0.0.1", "--dry-run"])
         .assert()
         .success()
         .stdout(contains("bootstrap starting for root@127.0.0.1"));
+}
+
+#[test]
+fn init_without_target_and_without_config_fails() {
+    let dir = tempdir().expect("tempdir");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["init", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(contains("missing SSH target"))
+        .stderr(contains("positional target (init)"));
 }
 
 #[test]
