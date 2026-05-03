@@ -1,4 +1,4 @@
-# 🥔 ptto V0.1.0
+# 🥔 ptto v0+.1+.0+
 
 [![codecov](https://codecov.io/github/lhemerly/ptto/graph/badge.svg?token=O6W62RLDY4)](https://codecov.io/github/lhemerly/ptto)
 
