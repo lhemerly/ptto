@@ -1,0 +1,107 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to include in artifact names (for example v0.1.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: ptto
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Prepare metadata
+        id: meta
+        shell: bash
+        env:
+          RAW_TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          RAW_TAG="$RAW_TAG_INPUT"
+
+          SAFE_TAG="$(printf '%s' "$RAW_TAG" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
+          if [ -z "$SAFE_TAG" ]; then
+            SAFE_TAG="untagged"
+          fi
+
+          RUNNER_OS_LOWER="$(printf '%s' "${{ runner.os }}" | tr '[:upper:]' '[:lower:]')"
+          RUNNER_ARCH_LOWER="$(printf '%s' "${{ runner.arch }}" | tr '[:upper:]' '[:lower:]')"
+
+          case "$RUNNER_ARCH_LOWER" in
+            x64) ARCH_LABEL="x86_64" ;;
+            arm64) ARCH_LABEL="aarch64" ;;
+            *) ARCH_LABEL="$RUNNER_ARCH_LOWER" ;;
+          esac
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            BIN_EXT=".exe"
+          else
+            BIN_EXT=""
+          fi
+
+          echo "tag=$SAFE_TAG" >> "$GITHUB_OUTPUT"
+          echo "os_label=$RUNNER_OS_LOWER" >> "$GITHUB_OUTPUT"
+          echo "arch_label=$ARCH_LABEL" >> "$GITHUB_OUTPUT"
+          echo "bin_ext=$BIN_EXT" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ARTIFACT_DIR="dist"
+          mkdir -p "$ARTIFACT_DIR"
+          cp "target/release/${BIN_NAME}${{ steps.meta.outputs.bin_ext }}" "$ARTIFACT_DIR/"
+
+          ARCHIVE_NAME="${BIN_NAME}-${{ steps.meta.outputs.tag }}-${{ steps.meta.outputs.os_label }}-${{ steps.meta.outputs.arch_label }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            (
+              cd "$ARTIFACT_DIR"
+              7z a "../${ARCHIVE_NAME}.zip" "${BIN_NAME}${{ steps.meta.outputs.bin_ext }}"
+            )
+            echo "ARTIFACT_FILE=${ARCHIVE_NAME}.zip" >> "$GITHUB_ENV"
+          else
+            tar -czf "${ARCHIVE_NAME}.tar.gz" -C "$ARTIFACT_DIR" "${BIN_NAME}${{ steps.meta.outputs.bin_ext }}"
+            echo "ARTIFACT_FILE=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_FILE }}
+          path: ${{ env.ARTIFACT_FILE }}
+          if-no-files-found: error
+
+      - name: Build summary
+        run: |
+          echo "Generated artifact: ${{ env.ARTIFACT_FILE }}" >> "$GITHUB_STEP_SUMMARY"
