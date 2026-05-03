@@ -17,3 +17,8 @@ toml = "0.8"
 assert_cmd = "2.0"
 predicates = "3.1"
 tempfile = "3.14"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
