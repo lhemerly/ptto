@@ -1,6 +1,6 @@
 [package]
 name = "ptto"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "A highly opinionated CLI to deploy single-binary web apps to a single VPS"
 license = "MIT"
