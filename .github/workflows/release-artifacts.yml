@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -40,14 +42,12 @@ jobs:
       - name: Prepare metadata
         id: meta
         shell: bash
+        env:
+          RAW_TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
         run: |
           set -euo pipefail
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            RAW_TAG='${{ inputs.release_tag }}'
-          else
-            RAW_TAG='${{ github.ref_name }}'
-          fi
+          RAW_TAG="$RAW_TAG_INPUT"
 
           SAFE_TAG="$(printf '%s' "$RAW_TAG" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
           if [ -z "$SAFE_TAG" ]; then
