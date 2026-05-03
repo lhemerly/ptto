@@ -1,0 +1,71 @@
+name: Release Artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: ptto
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_suffix: linux-x86_64
+            bin_ext: ""
+          - os: macos-latest
+            artifact_suffix: macos-aarch64
+            bin_ext: ""
+          - os: windows-latest
+            artifact_suffix: windows-x86_64
+            bin_ext: .exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_NAME="${GITHUB_REF_NAME:-manual}"
+          ARTIFACT_DIR="dist"
+          mkdir -p "$ARTIFACT_DIR"
+          cp "target/release/${BIN_NAME}${{ matrix.bin_ext }}" "$ARTIFACT_DIR/"
+
+          ARCHIVE_NAME="${BIN_NAME}-${TAG_NAME}-${{ matrix.artifact_suffix }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "${ARCHIVE_NAME}.zip" "$ARTIFACT_DIR/${BIN_NAME}${{ matrix.bin_ext }}"
+            echo "ARTIFACT_FILE=${ARCHIVE_NAME}.zip" >> "$GITHUB_ENV"
+          else
+            tar -czf "${ARCHIVE_NAME}.tar.gz" -C "$ARTIFACT_DIR" "${BIN_NAME}${{ matrix.bin_ext }}"
+            echo "ARTIFACT_FILE=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_FILE }}
+          path: ${{ env.ARTIFACT_FILE }}
+          if-no-files-found: error
+
+      - name: Build summary
+        run: |
+          echo "Generated artifact: ${{ env.ARTIFACT_FILE }}" >> "$GITHUB_STEP_SUMMARY"
