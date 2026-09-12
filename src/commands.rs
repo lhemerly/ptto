@@ -29,6 +29,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             let config = PttoConfig::load()?;
             let domain = resolve_domain(domain, &config)?;
             let target = resolve_target(target, &config)?;
+            let source = resolve_source(source, &config);
             deploy(
                 &domain,
                 &target,
@@ -191,6 +192,12 @@ fn resolve_domain(cli_domain: Option<String>, config: &PttoConfig) -> Result<Str
         .context("missing domain: pass --domain or set domain in .ptto.toml")
 }
 
+fn resolve_source(cli_source: Option<String>, config: &PttoConfig) -> String {
+    cli_source
+        .or_else(|| config.source.clone())
+        .unwrap_or_else(|| ".".to_string())
+}
+
 fn logs(service: &str, ssh: &SshClient) -> Result<()> {
     validate_systemd_unit_name(service)?;
     println!("[ptto] streaming logs for service {service}");
@@ -325,6 +332,7 @@ fn caddy_init_commands() -> Vec<String> {
             concat!(
                 "set -eu; ",
                 "{}",
+                "$SUDO install -d -m 755 /opt/ptto/data; ",
                 "$SUDO systemctl enable --now caddy; ",
                 "$SUDO systemctl status caddy --no-pager --lines=0"
             ),
@@ -338,7 +346,7 @@ fn blue_green_deploy_commands(domain: &str) -> Vec<String> {
     vec![format!(
         concat!(
             "set -eu; {}",
-            "$SUDO install -d -m 755 /opt/ptto/bin /opt/ptto/run; ",
+            "$SUDO install -d -m 755 /opt/ptto/bin /opt/ptto/run /opt/ptto/data; ",
             "release=\"$(date +%Y%m%d%H%M%S)-$$\"; ",
             "new_bin=\"/opt/ptto/bin/ptto-app-$release\"; ",
             "$SUDO install -m 755 /tmp/ptto-app \"$new_bin\"; ",
@@ -434,8 +442,8 @@ mod tests {
     use super::{
         blue_green_deploy_commands, build_go_linux_amd64_binary, caddy_init_commands,
         caddyfile_for_port, ensure_artifact_parent_dir, go_build_command_preview, resolve_domain,
-        resolve_target, resolve_target_for_db, resolve_target_for_telemetry, validate_domain,
-        validate_systemd_unit_name, PttoConfig,
+        resolve_source, resolve_target, resolve_target_for_db, resolve_target_for_telemetry,
+        validate_domain, validate_systemd_unit_name, PttoConfig,
     };
 
     #[test]
@@ -445,6 +453,7 @@ mod tests {
         assert!(commands[0].contains("apt-get install -y caddy goaccess"));
         assert!(commands[0].contains("command -v goaccess"));
         assert!(commands[0].contains("goaccess install requires apt-get"));
+        assert!(commands[1].contains("install -d -m 755 /opt/ptto/data"));
         assert!(commands[1].contains("systemctl enable --now caddy"));
         assert!(commands[0].contains("sudo -n true"));
         assert!(commands[1].contains("sudo -n true"));
@@ -456,6 +465,7 @@ mod tests {
     fn blue_green_deploy_contains_swap_steps() {
         let commands = blue_green_deploy_commands("example.com");
         assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains("install -d -m 755 /opt/ptto/bin /opt/ptto/run /opt/ptto/data"));
         assert!(commands[0].contains("install -m 755 /tmp/ptto-app"));
         assert!(commands[0].contains("pick_port()"));
         assert!(commands[0].contains("new_port=\"$(pick_port)\""));
@@ -571,6 +581,7 @@ mod tests {
             host: Some("root@from-config".to_string()),
             domain: Some("from-config.example.com".to_string()),
             ssh_key: None,
+            source: Some("./from-config".to_string()),
         };
 
         let target = resolve_target(Some("root@from-cli".to_string()), &config)
@@ -582,11 +593,13 @@ mod tests {
                 .expect("telemetry target should resolve from cli");
         let domain =
             resolve_domain(Some("from-cli.example.com".to_string()), &config).expect("domain");
+        let source = resolve_source(Some("./from-cli".to_string()), &config);
 
         assert_eq!(target, "root@from-cli");
         assert_eq!(db_target, "root@db-cli");
         assert_eq!(telemetry_target, "root@telemetry-cli");
         assert_eq!(domain, "from-cli.example.com");
+        assert_eq!(source, "./from-cli");
     }
 
     #[test]
@@ -595,6 +608,7 @@ mod tests {
             host: Some("root@config-host".to_string()),
             domain: Some("config.example.com".to_string()),
             ssh_key: None,
+            source: Some("./config-source".to_string()),
         };
 
         let target = resolve_target(None, &config).expect("target should come from config");
@@ -603,11 +617,13 @@ mod tests {
         let telemetry_target = resolve_target_for_telemetry(None, &config)
             .expect("telemetry target should come from config");
         let domain = resolve_domain(None, &config).expect("domain should come from config");
+        let source = resolve_source(None, &config);
 
         assert_eq!(target, "root@config-host");
         assert_eq!(db_target, "root@config-host");
         assert_eq!(telemetry_target, "root@config-host");
         assert_eq!(domain, "config.example.com");
+        assert_eq!(source, "./config-source");
     }
 
     #[test]
@@ -620,6 +636,7 @@ mod tests {
         let telemetry_error = resolve_target_for_telemetry(None, &config)
             .expect_err("telemetry target should be required");
         let domain_error = resolve_domain(None, &config).expect_err("domain should be required");
+        let default_source = resolve_source(None, &config);
 
         let target_error_text = target_error.to_string();
         let domain_error_text = domain_error.to_string();
@@ -632,5 +649,6 @@ mod tests {
         assert!(domain_error_text.contains("missing domain"));
         assert!(domain_error_text.contains("--domain"));
         assert!(domain_error_text.contains(".ptto.toml"));
+        assert_eq!(default_source, ".");
     }
 }

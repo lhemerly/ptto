@@ -33,8 +33,8 @@ pub enum Command {
         #[arg(long, default_value = "./app")]
         artifact: String,
         /// Go package/directory to build
-        #[arg(long, default_value = ".")]
-        source: String,
+        #[arg(long)]
+        source: Option<String>,
         /// Print remote commands instead of executing them
         #[arg(long, default_value_t = false)]
         dry_run: bool,

@@ -12,6 +12,7 @@ pub struct PttoConfig {
     pub host: Option<String>,
     pub domain: Option<String>,
     pub ssh_key: Option<String>,
+    pub source: Option<String>,
 }
 
 impl PttoConfig {
@@ -47,6 +48,7 @@ mod tests {
         assert!(config.host.is_none());
         assert!(config.domain.is_none());
         assert!(config.ssh_key.is_none());
+        assert!(config.source.is_none());
     }
 
     #[test]
@@ -55,7 +57,7 @@ mod tests {
         let config_path = temp_dir.path().join(CONFIG_FILENAME);
         std::fs::write(
             &config_path,
-            "host = \"root@host\"\ndomain = \"example.com\"\nssh_key = \"~/.ssh/id_ed25519\"\n",
+            "host = \"root@host\"\ndomain = \"example.com\"\nssh_key = \"~/.ssh/id_ed25519\"\nsource = \"./cmd/server\"\n",
         )
         .expect("write config");
 
@@ -64,6 +66,7 @@ mod tests {
         assert_eq!(config.host.as_deref(), Some("root@host"));
         assert_eq!(config.domain.as_deref(), Some("example.com"));
         assert_eq!(config.ssh_key.as_deref(), Some("~/.ssh/id_ed25519"));
+        assert_eq!(config.source.as_deref(), Some("./cmd/server"));
     }
 
     #[test]

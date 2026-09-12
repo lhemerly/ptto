@@ -87,7 +87,36 @@ ssh_key = "~/.ssh/custom_key"
         .stdout(contains("deploy pipeline planned for domain example.com"))
         .stdout(contains(
             "scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -i ~/.ssh/custom_key",
-        ));
+        ))
+        .stdout(contains("go build -o './app' '.'"));
+}
+
+#[test]
+fn deploy_uses_source_from_ptto_toml_and_allows_cli_override() {
+    let dir = tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(".ptto.toml"),
+        r#"host = "root@127.0.0.1"
+domain = "example.com"
+source = "./cmd/server"
+"#,
+    )
+    .expect("config should write");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["deploy", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains("go build -o './app' './cmd/server'"));
+
+    let mut override_cmd = Command::cargo_bin("ptto").expect("binary should build");
+    override_cmd
+        .current_dir(dir.path())
+        .args(["deploy", "--source", "./cmd/custom", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains("go build -o './app' './cmd/custom'"));
 }
 
 #[test]
