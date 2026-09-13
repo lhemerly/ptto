@@ -465,7 +465,9 @@ mod tests {
     fn blue_green_deploy_contains_swap_steps() {
         let commands = blue_green_deploy_commands("example.com");
         assert_eq!(commands.len(), 1);
-        assert!(commands[0].contains("install -d -m 755 /opt/ptto/bin /opt/ptto/run /opt/ptto/data"));
+        assert!(
+            commands[0].contains("install -d -m 755 /opt/ptto/bin /opt/ptto/run /opt/ptto/data")
+        );
         assert!(commands[0].contains("install -m 755 /tmp/ptto-app"));
         assert!(commands[0].contains("pick_port()"));
         assert!(commands[0].contains("new_port=\"$(pick_port)\""));
