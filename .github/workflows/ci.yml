@@ -64,6 +64,7 @@ jobs:
         env:
           RUSTFLAGS: -C link-dead-code
         run: |
+          mkdir -p target
           cargo test --locked --all-targets --all-features --no-run --message-format=json \
             | jq -r 'select(.profile.test == true and .executable != null) | .executable' \
             > target/test-binaries.txt

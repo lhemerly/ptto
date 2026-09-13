@@ -39,6 +39,7 @@ host = "root@203.0.113.10"
 domain = "your-app.com"
 # optional
 ssh_key = "~/.ssh/id_ed25519"
+source = "./cmd/server" # defaults to "."
 ```
 
 2. Prepare the VPS once:
@@ -90,7 +91,7 @@ ptto deploy
 
 ## Behavior notes
 
-- `host`, `domain`, and optional `ssh_key` are read from `.ptto.toml` when command flags are omitted.
+- `host`, `domain`, and optional `ssh_key` and `source` are read from `.ptto.toml` when command flags are omitted.
 - Domain validation rejects whitespace/control characters.
 - `--dry-run` shows planned build/remote actions without executing remote mutations.
 
