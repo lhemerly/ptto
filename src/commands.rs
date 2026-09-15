@@ -74,7 +74,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             command,
         } => {
             let config = PttoConfig::load()?;
-            let app_name = resolve_app_for_logs(app, &config);
+            let app_name = resolve_app(app, &config)?;
             let target = resolve_target_for_db(target, &config)?;
             let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
             db(&app_name, command, &ssh)
