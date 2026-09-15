@@ -10,8 +10,6 @@ use crate::{
     ssh::SshClient,
 };
 
-const REMOTE_DB_PATH: &str = "/opt/ptto/data/database.sqlite";
-
 pub fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Init { target, dry_run } => {
@@ -20,6 +18,7 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             init(&target, config.ssh_key.as_deref(), dry_run)
         }
         Command::Deploy {
+            app,
             domain,
             target,
             artifact,
@@ -27,10 +26,12 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             dry_run,
         } => {
             let config = PttoConfig::load()?;
+            let app = resolve_app(app, &config)?;
             let domain = resolve_domain(domain, &config)?;
             let target = resolve_target(target, &config)?;
             let source = resolve_source(source, &config);
             deploy(
+                &app,
                 &domain,
                 &target,
                 config.ssh_key.as_deref(),
@@ -39,11 +40,21 @@ pub fn dispatch(cli: Cli) -> Result<()> {
                 dry_run,
             )
         }
-        Command::Logs { service, target } => {
+        Command::Logs {
+            service,
+            app,
+            target,
+        } => {
             let config = PttoConfig::load()?;
+            let app_name = resolve_app_for_logs(app, &config);
+            let service_name = if service != "ptto-app" {
+                service
+            } else {
+                app_name
+            };
             let target = resolve_target_for_telemetry(target, &config)?;
             let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
-            logs(&service, &ssh)
+            logs(&service_name, &ssh)
         }
         Command::Top { target } => {
             let config = PttoConfig::load()?;
@@ -57,77 +68,114 @@ pub fn dispatch(cli: Cli) -> Result<()> {
             let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
             traffic(&ssh)
         }
-        Command::Db { target, command } => {
+        Command::Db {
+            app,
+            target,
+            command,
+        } => {
             let config = PttoConfig::load()?;
+            let app_name = resolve_app(app, &config)?;
             let target = resolve_target_for_db(target, &config)?;
             let ssh = SshClient::new(target, config.ssh_key.as_deref(), false);
-            db(command, &ssh)
+            db(&app_name, command, &ssh)
         }
         Command::GenerateKey => generate_key(),
     }
 }
 
-fn db(command: DbCommand, ssh: &SshClient) -> Result<()> {
+fn db(app: &str, command: DbCommand, ssh: &SshClient) -> Result<()> {
+    let db_path = remote_db_path(app);
+    let (app_bin, app_pid, app_port, app_dir) = if app == "ptto-app" {
+        (
+            "/opt/ptto/bin/ptto-app".to_string(),
+            "/opt/ptto/run/ptto-app.pid".to_string(),
+            "/opt/ptto/run/ptto-app.port".to_string(),
+            "/opt/ptto/data".to_string(),
+        )
+    } else {
+        (
+            format!("/opt/ptto/apps/{app}/bin/{app}"),
+            format!("/opt/ptto/apps/{app}/run/{app}.pid"),
+            format!("/opt/ptto/apps/{app}/run/{app}.port"),
+            format!("/opt/ptto/apps/{app}/data"),
+        )
+    };
     match command {
         DbCommand::Shell => {
-            println!("[ptto] opening remote sqlite shell at {REMOTE_DB_PATH}");
+            println!("[ptto] opening remote sqlite shell at {db_path}");
             ssh.run_interactive(&format!(
                 "set -eu; {}; $SUDO sqlite3 {}",
                 sudo_prefix("db shell"),
-                shell_quote(REMOTE_DB_PATH)
+                shell_quote(&db_path)
             ))
         }
         DbCommand::Pull { local_path } => {
-            println!("[ptto] pulling remote database from {REMOTE_DB_PATH} to {local_path}");
+            println!("[ptto] pulling remote database from {db_path} to {local_path}");
             ensure_artifact_parent_dir(&local_path)?;
-            let temp_remote = "/tmp/ptto-db-pull.sqlite";
+            let temp_remote = format!("/tmp/ptto-db-pull-{}.sqlite", app);
             ssh.run(&format!(
                 concat!("set -eu; ", "{}", "$SUDO install -m 600 {} {};"),
                 sudo_prefix("db pull"),
-                shell_quote(REMOTE_DB_PATH),
-                shell_quote(temp_remote)
+                shell_quote(&db_path),
+                shell_quote(&temp_remote)
             ))?;
-            let copy_result = ssh.copy_file_from_remote(temp_remote, Path::new(&local_path));
-            let cleanup_result = ssh.run(&format!("set -eu; rm -f {}", shell_quote(temp_remote)));
+            let copy_result = ssh.copy_file_from_remote(&temp_remote, Path::new(&local_path));
+            let cleanup_result = ssh.run(&format!("set -eu; rm -f {}", shell_quote(&temp_remote)));
             copy_result?;
             cleanup_result
         }
         DbCommand::Push { local_path } => {
-            println!("[ptto] pushing local database {local_path} to {REMOTE_DB_PATH}");
+            println!("[ptto] pushing local database {local_path} to {db_path}");
             let local = Path::new(&local_path);
             if !local.exists() {
                 bail!("local database file does not exist: {}", local.display());
             }
-            ssh.copy_file(local, "/tmp/ptto-database.sqlite")?;
+            let temp_remote = format!("/tmp/ptto-database-{}.sqlite", app);
+            ssh.copy_file(local, &temp_remote)?;
             ssh.run(&format!(
                 concat!(
                     "set -eu; ",
                     "{}",
-                    "$SUDO install -d -m 755 /opt/ptto/data; ",
+                    "$SUDO install -d -m 755 {}; ",
                     "restart_mode=\"none\"; ",
-                    "if $SUDO test -f /opt/ptto/run/ptto-app.pid; then ",
-                    "db_old_pid=\"$($SUDO cat /opt/ptto/run/ptto-app.pid)\"; ",
+                    "if $SUDO test -f {}; then ",
+                    "db_old_pid=\"$($SUDO cat {})\"; ",
                     "if [ -n \"$db_old_pid\" ] && $SUDO kill -0 \"$db_old_pid\" >/dev/null 2>&1; then ",
                     "restart_mode=\"pid\"; $SUDO kill -TERM \"$db_old_pid\" || true; ",
                     "for _ in $(seq 1 20); do if ! $SUDO kill -0 \"$db_old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; ",
                     "if $SUDO kill -0 \"$db_old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$db_old_pid\" || true; fi; ",
                     "fi; ",
-                    "elif $SUDO systemctl list-unit-files ptto-app.service >/dev/null 2>&1; then ",
-                    "restart_mode=\"systemd\"; $SUDO systemctl stop ptto-app; ",
+                    "elif $SUDO systemctl list-unit-files {}.service >/dev/null 2>&1; then ",
+                    "restart_mode=\"systemd\"; $SUDO systemctl stop {}; ",
                     "fi; ",
-                    "tmp_db=\"/opt/ptto/data/.database.sqlite.ptto-tmp-$$\"; ",
-                    "$SUDO install -m 640 /tmp/ptto-database.sqlite \"$tmp_db\"; ",
+                    "tmp_db=\"{}/.database.sqlite.ptto-tmp-$$\"; ",
+                    "$SUDO install -m 640 {} \"$tmp_db\"; ",
                     "$SUDO mv -f \"$tmp_db\" {}; ",
-                    "$SUDO rm -f /tmp/ptto-database.sqlite; ",
+                    "$SUDO rm -f {}; ",
                     "if [ \"$restart_mode\" = \"pid\" ]; then ",
-                    "if $SUDO test -f /opt/ptto/bin/ptto-app && $SUDO test -f /opt/ptto/run/ptto-app.port; then ",
-                    "db_port=\"$($SUDO cat /opt/ptto/run/ptto-app.port)\"; ",
-                    "$SUDO sh -c \"PORT=$db_port nohup /opt/ptto/bin/ptto-app >/var/log/ptto-app.log 2>&1 & echo \\$! > /opt/ptto/run/ptto-app.pid\"; ",
+                    "if $SUDO test -f {} && $SUDO test -f {}; then ",
+                    "db_port=\"$($SUDO cat {})\"; ",
+                    "$SUDO sh -c \"PORT=$db_port nohup '{}' >/var/log/{}.log 2>&1 & echo \\$! > {}\"; ",
                     "fi; ",
-                    "elif [ \"$restart_mode\" = \"systemd\" ]; then $SUDO systemctl start ptto-app; fi"
+                    "elif [ \"$restart_mode\" = \"systemd\" ]; then $SUDO systemctl start {}; fi"
                 ),
                 sudo_prefix("db push"),
-                shell_quote(REMOTE_DB_PATH)
+                shell_quote(&app_dir),
+                shell_quote(&app_pid),
+                shell_quote(&app_pid),
+                shell_quote(app),
+                shell_quote(app),
+                shell_quote(&app_dir),
+                shell_quote(&temp_remote),
+                shell_quote(&db_path),
+                shell_quote(&temp_remote),
+                shell_quote(&app_bin),
+                shell_quote(&app_port),
+                shell_quote(&app_port),
+                shell_quote(&app_bin),
+                shell_quote(app),
+                shell_quote(&app_pid),
+                shell_quote(app)
             ))
         }
     }
@@ -146,6 +194,7 @@ fn init(target: &str, ssh_key: Option<&str>, dry_run: bool) -> Result<()> {
 }
 
 fn deploy(
+    app: &str,
     domain: &str,
     target: &str,
     ssh_key: Option<&str>,
@@ -154,17 +203,56 @@ fn deploy(
     dry_run: bool,
 ) -> Result<()> {
     validate_domain(domain)?;
-    println!("[ptto] deploy pipeline planned for domain {domain}");
+    if app == "ptto-app" {
+        println!("[ptto] deploy pipeline planned for domain {domain}");
+    } else {
+        println!("[ptto] deploy pipeline planned for app '{app}' and domain {domain}");
+    }
     build_go_linux_amd64_binary(source, artifact, dry_run)?;
     let ssh = SshClient::new(target, ssh_key, dry_run);
     ssh.copy_file(Path::new(artifact), "/tmp/ptto-app")?;
     println!("[ptto] artifact staged over ssh at /tmp/ptto-app");
 
-    let deploy_commands = blue_green_deploy_commands(domain);
+    let deploy_commands = blue_green_deploy_commands(app, domain);
     let commands = deploy_commands.join("\n");
     ssh.run(&commands)?;
 
     println!("[ptto] blue-green deployment completed with graceful handoff");
+    Ok(())
+}
+
+fn remote_db_path(app: &str) -> String {
+    if app == "ptto-app" {
+        "/opt/ptto/data/database.sqlite".to_string()
+    } else {
+        format!("/opt/ptto/apps/{app}/data/database.sqlite")
+    }
+}
+
+fn resolve_app(cli_app: Option<String>, config: &PttoConfig) -> Result<String> {
+    let name = cli_app
+        .or_else(|| config.app.clone())
+        .unwrap_or_else(|| "ptto-app".to_string());
+    validate_app_name(&name)?;
+    Ok(name)
+}
+
+fn resolve_app_for_logs(cli_app: Option<String>, config: &PttoConfig) -> String {
+    cli_app
+        .or_else(|| config.app.clone())
+        .unwrap_or_else(|| "ptto-app".to_string())
+}
+
+fn validate_app_name(app: &str) -> Result<()> {
+    if app.is_empty() || app.len() > 64 {
+        bail!("invalid app name: expected 1-64 characters");
+    }
+    if !app
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        bail!("invalid app name: allowed characters are ASCII letters, digits, '-', and '_'");
+    }
     Ok(())
 }
 
@@ -333,6 +421,12 @@ fn caddy_init_commands() -> Vec<String> {
                 "set -eu; ",
                 "{}",
                 "$SUDO install -d -m 755 /opt/ptto/data; ",
+                "$SUDO install -d -m 755 /etc/caddy/apps; ",
+                "if [ ! -f /etc/caddy/Caddyfile ]; then ",
+                "echo 'import /etc/caddy/apps/*.caddy' | $SUDO tee /etc/caddy/Caddyfile >/dev/null; ",
+                "elif ! grep -F -q 'import /etc/caddy/apps/*.caddy' /etc/caddy/Caddyfile; then ",
+                "echo 'import /etc/caddy/apps/*.caddy' | $SUDO tee -a /etc/caddy/Caddyfile >/dev/null; ",
+                "fi; ",
                 "$SUDO systemctl enable --now caddy; ",
                 "$SUDO systemctl status caddy --no-pager --lines=0"
             ),
@@ -341,40 +435,112 @@ fn caddy_init_commands() -> Vec<String> {
     ]
 }
 
-fn blue_green_deploy_commands(domain: &str) -> Vec<String> {
-    let caddy_template = shell_quote(&caddyfile_for_port(domain, "__PTTO_PORT__"));
+fn blue_green_deploy_commands(app: &str, domain: &str) -> Vec<String> {
+    let caddy_template = shell_quote(&caddyfile_for_port(app, domain, "__PTTO_PORT__"));
+    let root_caddy_bootstrap = if app == "ptto-app" {
+        concat!(
+            "if [ ! -f \"$root_caddy\" ]; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null; ",
+            "elif ! grep -F -q \"$import_stmt\" \"$root_caddy\"; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null; ",
+            "fi; "
+        )
+    } else {
+        concat!(
+            "if [ ! -f \"$root_caddy\" ]; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null; ",
+            "elif ! grep -F -q \"$import_stmt\" \"$root_caddy\"; then printf '%s\\n' \"$import_stmt\" | $SUDO tee -a \"$root_caddy\" >/dev/null; ",
+            "fi; "
+        )
+    };
+    let (
+        bin_dir,
+        run_dir,
+        data_dir,
+        current_bin_link,
+        current_pid_file,
+        current_port_file,
+        log_file,
+    ) = if app == "ptto-app" {
+        (
+            "/opt/ptto/bin".to_string(),
+            "/opt/ptto/run".to_string(),
+            "/opt/ptto/data".to_string(),
+            "/opt/ptto/bin/ptto-app".to_string(),
+            "/opt/ptto/run/ptto-app.pid".to_string(),
+            "/opt/ptto/run/ptto-app.port".to_string(),
+            "/var/log/ptto-app.log".to_string(),
+        )
+    } else {
+        (
+            format!("/opt/ptto/apps/{app}/bin"),
+            format!("/opt/ptto/apps/{app}/run"),
+            format!("/opt/ptto/apps/{app}/data"),
+            format!("/opt/ptto/apps/{app}/bin/{app}"),
+            format!("/opt/ptto/apps/{app}/run/{app}.pid"),
+            format!("/opt/ptto/apps/{app}/run/{app}.port"),
+            format!("/var/log/{app}.log"),
+        )
+    };
+
     vec![format!(
         concat!(
             "set -eu; {}",
-            "$SUDO install -d -m 755 /opt/ptto/bin /opt/ptto/run /opt/ptto/data; ",
+            "$SUDO install -d -m 755 {} {} {} /etc/caddy/apps; ",
             "release=\"$(date +%Y%m%d%H%M%S)-$$\"; ",
-            "new_bin=\"/opt/ptto/bin/ptto-app-$release\"; ",
+            "new_bin=\"{}/{}-$release\"; ",
             "$SUDO install -m 755 /tmp/ptto-app \"$new_bin\"; ",
             "pick_port() {{ while :; do p=\"$(shuf -i 20000-45000 -n 1)\"; if ! ss -ltn \"( sport = :$p )\" | grep -q LISTEN; then echo \"$p\"; return 0; fi; done; }}; ",
-            "new_port=\"$(pick_port)\"; new_pid_file=\"/opt/ptto/run/ptto-app.next.pid\"; ",
-            "$SUDO sh -c \"PORT=$new_port nohup '$new_bin' >/var/log/ptto-app.log 2>&1 & echo \\$! > '$new_pid_file'\"; ",
+            "new_port=\"$(pick_port)\"; new_pid_file=\"{}/{}.next.pid\"; ",
+            "$SUDO sh -c \"PORT=$new_port nohup '$new_bin' >{} 2>&1 & echo \\$! > '$new_pid_file'\"; ",
             "attempt=0; until curl -fsS \"http://127.0.0.1:$new_port\" >/dev/null 2>&1 || [ \"$attempt\" -ge 20 ]; do attempt=\"$((attempt+1))\"; sleep 0.5; done; ",
             "if ! curl -fsS \"http://127.0.0.1:$new_port\" >/dev/null 2>&1; then echo \"[ptto] error: new release failed health check\"; new_pid=\"$($SUDO cat \"$new_pid_file\")\"; $SUDO kill \"$new_pid\" >/dev/null 2>&1 || true; $SUDO rm -f \"$new_pid_file\"; exit 1; fi; ",
             "tmp_caddy=\"$(mktemp)\"; trap 'rm -f \"$tmp_caddy\"' EXIT; ",
             "printf '%s' {} | sed \"s/__PTTO_PORT__/$new_port/g\" > \"$tmp_caddy\"; ",
-            "$SUDO caddy validate --config \"$tmp_caddy\"; ",
-            "backup_dir=\"/etc/caddy/backups\"; if [ -f /etc/caddy/Caddyfile ]; then $SUDO install -d -m 755 \"$backup_dir\"; $SUDO cp /etc/caddy/Caddyfile \"$backup_dir/Caddyfile.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
-            "$SUDO mv \"$tmp_caddy\" /etc/caddy/Caddyfile; $SUDO chmod 644 /etc/caddy/Caddyfile; $SUDO systemctl reload caddy; ",
-            "if $SUDO test -f /opt/ptto/run/ptto-app.pid; then old_pid=\"$($SUDO cat /opt/ptto/run/ptto-app.pid)\"; if [ -n \"$old_pid\" ] && $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -TERM \"$old_pid\" || true; for _ in $(seq 1 20); do if ! $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; if $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$old_pid\" || true; fi; fi; fi; ",
-            "$SUDO mv \"$new_pid_file\" /opt/ptto/run/ptto-app.pid; $SUDO sh -c \"echo '$new_port' > /opt/ptto/run/ptto-app.port\"; ",
-            "$SUDO ln -sfn \"$new_bin\" /opt/ptto/bin/ptto-app; $SUDO systemctl status caddy --no-pager --lines=0"
+            "app_caddy=\"/etc/caddy/apps/{}.caddy\"; ",
+            "backup_dir=\"/etc/caddy/backups\"; ",
+            "root_caddy=\"/etc/caddy/Caddyfile\"; ",
+            "import_stmt='import /etc/caddy/apps/*.caddy'; ",
+            "$SUDO install -d -m 755 \"$backup_dir\"; ",
+            "if [ -f \"$app_caddy\" ]; then $SUDO cp \"$app_caddy\" \"$backup_dir/{}.caddy.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
+            "if [ -f \"$root_caddy\" ]; then $SUDO cp \"$root_caddy\" \"$backup_dir/Caddyfile.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
+            "$SUDO install -m 644 \"$tmp_caddy\" \"$app_caddy\"; ",
+            "{}",
+            "$SUDO caddy validate --config \"$root_caddy\"; ",
+            "$SUDO systemctl reload caddy; ",
+            "if $SUDO test -f {}; then old_pid=\"$($SUDO cat {})\"; if [ -n \"$old_pid\" ] && $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -TERM \"$old_pid\" || true; for _ in $(seq 1 20); do if ! $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; if $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$old_pid\" || true; fi; fi; fi; ",
+            "$SUDO mv \"$new_pid_file\" {}; $SUDO sh -c \"echo '$new_port' > {}\"; ",
+            "$SUDO ln -sfn \"$new_bin\" {}; $SUDO systemctl status caddy --no-pager --lines=0"
         ),
         sudo_prefix("deploy"),
-        caddy_template
+        shell_quote(&bin_dir),
+        shell_quote(&run_dir),
+        shell_quote(&data_dir),
+        bin_dir,
+        app,
+        run_dir,
+        app,
+        shell_quote(&log_file),
+        caddy_template,
+        app,
+        root_caddy_bootstrap,
+        app,
+        shell_quote(&current_pid_file),
+        shell_quote(&current_pid_file),
+        shell_quote(&current_pid_file),
+        shell_quote(&current_port_file),
+        shell_quote(&current_bin_link)
     )]
 }
 
-fn caddyfile_for_port(domain: &str, port_expr: &str) -> String {
+fn caddyfile_for_port(app: &str, domain: &str, port_expr: &str) -> String {
+    let log_file = if app == "ptto-app" {
+        "/var/log/caddy/ptto-access.log".to_string()
+    } else {
+        format!("/var/log/caddy/{}-access.log", app)
+    };
     format!(
         "{domain} {{
     reverse_proxy 127.0.0.1:{port_expr}
     log {{
-        output file /var/log/caddy/ptto-access.log
+        output file {log_file}
         format console
     }}
 }}
@@ -441,9 +607,10 @@ mod tests {
 
     use super::{
         blue_green_deploy_commands, build_go_linux_amd64_binary, caddy_init_commands,
-        caddyfile_for_port, ensure_artifact_parent_dir, go_build_command_preview, resolve_domain,
-        resolve_source, resolve_target, resolve_target_for_db, resolve_target_for_telemetry,
-        validate_domain, validate_systemd_unit_name, PttoConfig,
+        caddyfile_for_port, ensure_artifact_parent_dir, go_build_command_preview, remote_db_path,
+        resolve_app, resolve_domain, resolve_source, resolve_target, resolve_target_for_db,
+        resolve_target_for_telemetry, validate_app_name, validate_domain,
+        validate_systemd_unit_name, PttoConfig,
     };
 
     #[test]
@@ -454,6 +621,8 @@ mod tests {
         assert!(commands[0].contains("command -v goaccess"));
         assert!(commands[0].contains("goaccess install requires apt-get"));
         assert!(commands[1].contains("install -d -m 755 /opt/ptto/data"));
+        assert!(commands[1].contains("install -d -m 755 /etc/caddy/apps"));
+        assert!(commands[1].contains("import /etc/caddy/apps/*.caddy"));
         assert!(commands[1].contains("systemctl enable --now caddy"));
         assert!(commands[0].contains("sudo -n true"));
         assert!(commands[1].contains("sudo -n true"));
@@ -463,14 +632,17 @@ mod tests {
 
     #[test]
     fn blue_green_deploy_contains_swap_steps() {
-        let commands = blue_green_deploy_commands("example.com");
+        let commands = blue_green_deploy_commands("ptto-app", "example.com");
         assert_eq!(commands.len(), 1);
-        assert!(
-            commands[0].contains("install -d -m 755 /opt/ptto/bin /opt/ptto/run /opt/ptto/data")
-        );
+        assert!(commands[0].contains(
+            "install -d -m 755 '/opt/ptto/bin' '/opt/ptto/run' '/opt/ptto/data' /etc/caddy/apps"
+        ));
+        assert!(commands[0].contains("import /etc/caddy/apps/*.caddy"));
         assert!(commands[0].contains("install -m 755 /tmp/ptto-app"));
         assert!(commands[0].contains("pick_port()"));
         assert!(commands[0].contains("new_port=\"$(pick_port)\""));
+        assert!(commands[0].contains("/etc/caddy/apps/ptto-app.caddy"));
+        assert!(commands[0].contains("caddy validate --config \"$root_caddy\""));
         assert!(commands[0].contains("systemctl reload caddy"));
         assert!(commands[0].contains("$SUDO kill -0"));
         assert!(commands[0].contains("kill -TERM"));
@@ -478,10 +650,40 @@ mod tests {
     }
 
     #[test]
+    fn blue_green_deploy_isolates_named_apps() {
+        let commands = blue_green_deploy_commands("blog-svc", "blog.example.com");
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains("/opt/ptto/apps/blog-svc/bin"));
+        assert!(commands[0].contains("/opt/ptto/apps/blog-svc/run"));
+        assert!(commands[0].contains("/opt/ptto/apps/blog-svc/data"));
+        assert!(commands[0].contains("/etc/caddy/apps/blog-svc.caddy"));
+        assert!(commands[0].contains("/var/log/blog-svc.log"));
+        assert!(commands[0].contains("ln -sfn \"$new_bin\" '/opt/ptto/apps/blog-svc/bin/blog-svc'"));
+        assert!(commands[0].contains("tee -a \"$root_caddy\" >/dev/null"));
+    }
+
+    #[test]
+    fn blue_green_deploy_migrates_legacy_default_caddyfile() {
+        let commands = blue_green_deploy_commands("ptto-app", "example.com");
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains("root_caddy=\"/etc/caddy/Caddyfile\""));
+        assert!(commands[0].contains("import_stmt='import /etc/caddy/apps/*.caddy'"));
+        assert!(commands[0].contains(
+            "elif ! grep -F -q \"$import_stmt\" \"$root_caddy\"; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null;"
+        ));
+        assert!(!commands[0].contains("tee -a \"$root_caddy\" >/dev/null"));
+    }
+
+    #[test]
     fn caddyfile_for_port_renders_reverse_proxy_target() {
-        let caddyfile = caddyfile_for_port("example.com", "__PTTO_PORT__");
+        let caddyfile = caddyfile_for_port("ptto-app", "example.com", "__PTTO_PORT__");
         assert!(caddyfile.contains("reverse_proxy 127.0.0.1:__PTTO_PORT__"));
         assert!(caddyfile.contains("output file /var/log/caddy/ptto-access.log"));
+
+        let tenant_caddyfile =
+            caddyfile_for_port("api-service", "api.example.com", "__PTTO_PORT__");
+        assert!(tenant_caddyfile.contains("reverse_proxy 127.0.0.1:__PTTO_PORT__"));
+        assert!(tenant_caddyfile.contains("output file /var/log/caddy/api-service-access.log"));
     }
 
     #[test]
@@ -584,6 +786,7 @@ mod tests {
             domain: Some("from-config.example.com".to_string()),
             ssh_key: None,
             source: Some("./from-config".to_string()),
+            app: None,
         };
 
         let target = resolve_target(Some("root@from-cli".to_string()), &config)
@@ -611,6 +814,7 @@ mod tests {
             domain: Some("config.example.com".to_string()),
             ssh_key: None,
             source: Some("./config-source".to_string()),
+            app: None,
         };
 
         let target = resolve_target(None, &config).expect("target should come from config");
@@ -652,5 +856,46 @@ mod tests {
         assert!(domain_error_text.contains("--domain"));
         assert!(domain_error_text.contains(".ptto.toml"));
         assert_eq!(default_source, ".");
+    }
+
+    #[test]
+    fn resolve_app_prefers_cli_then_config_then_default() {
+        let empty_config = PttoConfig::default();
+        assert_eq!(
+            resolve_app(None, &empty_config).expect("default app"),
+            "ptto-app"
+        );
+
+        let config_with_app = PttoConfig {
+            app: Some("config-app".to_string()),
+            ..PttoConfig::default()
+        };
+        assert_eq!(
+            resolve_app(None, &config_with_app).expect("config app"),
+            "config-app"
+        );
+
+        assert_eq!(
+            resolve_app(Some("cli-app".to_string()), &config_with_app).expect("cli app"),
+            "cli-app"
+        );
+    }
+
+    #[test]
+    fn app_name_validation_enforces_rules() {
+        assert!(validate_app_name("my-service_1").is_ok());
+        assert!(validate_app_name("").is_err());
+        assert!(validate_app_name("bad name with space").is_err());
+        assert!(validate_app_name("bad/slash").is_err());
+        assert!(validate_app_name(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn remote_db_path_backward_compatible_and_tenant_isolated() {
+        assert_eq!(remote_db_path("ptto-app"), "/opt/ptto/data/database.sqlite");
+        assert_eq!(
+            remote_db_path("second-app"),
+            "/opt/ptto/apps/second-app/data/database.sqlite"
+        );
     }
 }

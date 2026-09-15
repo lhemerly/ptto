@@ -23,6 +23,9 @@ pub enum Command {
     },
     /// Build and deploy the app to a server
     Deploy {
+        /// Application name for multi-tenant isolation
+        #[arg(long)]
+        app: Option<String>,
         /// Public domain that should route to this deployment
         #[arg(long)]
         domain: Option<String>,
@@ -44,6 +47,9 @@ pub enum Command {
         /// Name of the service to stream
         #[arg(default_value = "ptto-app")]
         service: String,
+        /// Application name for multi-tenant isolation
+        #[arg(long)]
+        app: Option<String>,
         /// SSH target in user@host format
         #[arg(long)]
         target: Option<String>,
@@ -62,6 +68,9 @@ pub enum Command {
     },
     /// Manage remote SQLite database
     Db {
+        /// Application name for multi-tenant isolation
+        #[arg(long)]
+        app: Option<String>,
         /// SSH target in user@host format
         #[arg(long)]
         target: Option<String>,

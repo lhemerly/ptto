@@ -215,3 +215,58 @@ fn db_pull_requires_target_when_not_in_config() {
         .stderr(contains("missing SSH target"))
         .stderr(contains("pass --target to ptto db"));
 }
+
+#[test]
+fn deploy_supports_app_multi_tenancy_via_cli_and_toml() {
+    let dir = tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(".ptto.toml"),
+        r#"host = "root@127.0.0.1"
+domain = "tenant1.example.com"
+app = "tenant-one"
+"#,
+    )
+    .expect("config should write");
+
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.current_dir(dir.path())
+        .args(["deploy", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "deploy pipeline planned for app 'tenant-one' and domain tenant1.example.com",
+        ))
+        .stdout(contains("/opt/ptto/apps/tenant-one/bin"))
+        .stdout(contains("/etc/caddy/apps/tenant-one.caddy"));
+
+    // CLI override --app
+    let mut override_cmd = Command::cargo_bin("ptto").expect("binary should build");
+    override_cmd
+        .current_dir(dir.path())
+        .args(["deploy", "--app", "override-app", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "deploy pipeline planned for app 'override-app' and domain tenant1.example.com",
+        ))
+        .stdout(contains("/opt/ptto/apps/override-app/bin"))
+        .stdout(contains("/etc/caddy/apps/override-app.caddy"));
+}
+
+#[test]
+fn deploy_rejects_invalid_app_names() {
+    let mut cmd = Command::cargo_bin("ptto").expect("binary should build");
+    cmd.args([
+        "deploy",
+        "--domain",
+        "example.com",
+        "--target",
+        "root@127.0.0.1",
+        "--app",
+        "bad app with spaces",
+        "--dry-run",
+    ])
+    .assert()
+    .failure()
+    .stderr(contains("invalid app name"));
+}
