@@ -437,6 +437,19 @@ fn caddy_init_commands() -> Vec<String> {
 
 fn blue_green_deploy_commands(app: &str, domain: &str) -> Vec<String> {
     let caddy_template = shell_quote(&caddyfile_for_port(app, domain, "__PTTO_PORT__"));
+    let root_caddy_bootstrap = if app == "ptto-app" {
+        concat!(
+            "if [ ! -f \"$root_caddy\" ]; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null; ",
+            "elif ! grep -F -q \"$import_stmt\" \"$root_caddy\"; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null; ",
+            "fi; "
+        )
+    } else {
+        concat!(
+            "if [ ! -f \"$root_caddy\" ]; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null; ",
+            "elif ! grep -F -q \"$import_stmt\" \"$root_caddy\"; then printf '%s\\n' \"$import_stmt\" | $SUDO tee -a \"$root_caddy\" >/dev/null; ",
+            "fi; "
+        )
+    };
     let (
         bin_dir,
         run_dir,
@@ -471,11 +484,6 @@ fn blue_green_deploy_commands(app: &str, domain: &str) -> Vec<String> {
         concat!(
             "set -eu; {}",
             "$SUDO install -d -m 755 {} {} {} /etc/caddy/apps; ",
-            "if [ ! -f /etc/caddy/Caddyfile ]; then ",
-            "echo 'import /etc/caddy/apps/*.caddy' | $SUDO tee /etc/caddy/Caddyfile >/dev/null; ",
-            "elif ! grep -F -q 'import /etc/caddy/apps/*.caddy' /etc/caddy/Caddyfile; then ",
-            "echo 'import /etc/caddy/apps/*.caddy' | $SUDO tee -a /etc/caddy/Caddyfile >/dev/null; ",
-            "fi; ",
             "release=\"$(date +%Y%m%d%H%M%S)-$$\"; ",
             "new_bin=\"{}/{}-$release\"; ",
             "$SUDO install -m 755 /tmp/ptto-app \"$new_bin\"; ",
@@ -488,11 +496,14 @@ fn blue_green_deploy_commands(app: &str, domain: &str) -> Vec<String> {
             "printf '%s' {} | sed \"s/__PTTO_PORT__/$new_port/g\" > \"$tmp_caddy\"; ",
             "app_caddy=\"/etc/caddy/apps/{}.caddy\"; ",
             "backup_dir=\"/etc/caddy/backups\"; ",
+            "root_caddy=\"/etc/caddy/Caddyfile\"; ",
+            "import_stmt='import /etc/caddy/apps/*.caddy'; ",
             "$SUDO install -d -m 755 \"$backup_dir\"; ",
             "if [ -f \"$app_caddy\" ]; then $SUDO cp \"$app_caddy\" \"$backup_dir/{}.caddy.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
-            "if [ -f /etc/caddy/Caddyfile ]; then $SUDO cp /etc/caddy/Caddyfile \"$backup_dir/Caddyfile.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
+            "if [ -f \"$root_caddy\" ]; then $SUDO cp \"$root_caddy\" \"$backup_dir/Caddyfile.$(date +%Y%m%d%H%M%S).bak\"; fi; ",
             "$SUDO install -m 644 \"$tmp_caddy\" \"$app_caddy\"; ",
-            "$SUDO caddy validate --config /etc/caddy/Caddyfile; ",
+            "{}",
+            "$SUDO caddy validate --config \"$root_caddy\"; ",
             "$SUDO systemctl reload caddy; ",
             "if $SUDO test -f {}; then old_pid=\"$($SUDO cat {})\"; if [ -n \"$old_pid\" ] && $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -TERM \"$old_pid\" || true; for _ in $(seq 1 20); do if ! $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then break; fi; sleep 0.5; done; if $SUDO kill -0 \"$old_pid\" >/dev/null 2>&1; then $SUDO kill -KILL \"$old_pid\" || true; fi; fi; fi; ",
             "$SUDO mv \"$new_pid_file\" {}; $SUDO sh -c \"echo '$new_port' > {}\"; ",
@@ -509,6 +520,7 @@ fn blue_green_deploy_commands(app: &str, domain: &str) -> Vec<String> {
         shell_quote(&log_file),
         caddy_template,
         app,
+        root_caddy_bootstrap,
         app,
         shell_quote(&current_pid_file),
         shell_quote(&current_pid_file),
@@ -630,7 +642,7 @@ mod tests {
         assert!(commands[0].contains("pick_port()"));
         assert!(commands[0].contains("new_port=\"$(pick_port)\""));
         assert!(commands[0].contains("/etc/caddy/apps/ptto-app.caddy"));
-        assert!(commands[0].contains("caddy validate --config /etc/caddy/Caddyfile"));
+        assert!(commands[0].contains("caddy validate --config \"$root_caddy\""));
         assert!(commands[0].contains("systemctl reload caddy"));
         assert!(commands[0].contains("$SUDO kill -0"));
         assert!(commands[0].contains("kill -TERM"));
@@ -647,6 +659,19 @@ mod tests {
         assert!(commands[0].contains("/etc/caddy/apps/blog-svc.caddy"));
         assert!(commands[0].contains("/var/log/blog-svc.log"));
         assert!(commands[0].contains("ln -sfn \"$new_bin\" '/opt/ptto/apps/blog-svc/bin/blog-svc'"));
+        assert!(commands[0].contains("tee -a \"$root_caddy\" >/dev/null"));
+    }
+
+    #[test]
+    fn blue_green_deploy_migrates_legacy_default_caddyfile() {
+        let commands = blue_green_deploy_commands("ptto-app", "example.com");
+        assert_eq!(commands.len(), 1);
+        assert!(commands[0].contains("root_caddy=\"/etc/caddy/Caddyfile\""));
+        assert!(commands[0].contains("import_stmt='import /etc/caddy/apps/*.caddy'"));
+        assert!(commands[0].contains(
+            "elif ! grep -F -q \"$import_stmt\" \"$root_caddy\"; then printf '%s\\n' \"$import_stmt\" | $SUDO tee \"$root_caddy\" >/dev/null;"
+        ));
+        assert!(!commands[0].contains("tee -a \"$root_caddy\" >/dev/null"));
     }
 
     #[test]
