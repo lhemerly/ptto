@@ -83,9 +83,9 @@ ptto deploy
 
 ### Database
 
-- `ptto db shell [--app <name>] [--target <user@host>]`
-- `ptto db pull [local_path] [--app <name>] [--target <user@host>]`
-- `ptto db push [local_path] [--app <name>] [--target <user@host>]`
+- `ptto db [--app <name>] [--target <user@host>] shell`
+- `ptto db [--app <name>] [--target <user@host>] pull [local_path]`
+- `ptto db [--app <name>] [--target <user@host>] push [local_path]`
 
 ### Utility
 
