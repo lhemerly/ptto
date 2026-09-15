@@ -42,6 +42,6 @@ Phase 4: Expansion (The 1-to-Many)
 
 Once the 1-VPS-to-1-App model is flawless, we expand.
 
-[ ] Multi-Tenancy: Upgrade the server architecture to support multiple .ptto.toml projects on a single potato using Caddy import directories and systemd namespace isolation.
+[x] Multi-Tenancy: Upgrade the server architecture to support multiple .ptto.toml projects on a single potato using Caddy import directories and systemd namespace isolation.
 
 [ ] Language Expansion: Expand the build step to support compiling Rust web servers (Axum/Actix) via cargo build --target x86_64-unknown-linux-musl.
